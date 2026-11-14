@@ -178,3 +178,25 @@ def test_metno_six_hourly_steps_are_blended(conn, cfg):
 def test_tenerife_route_rounds_anaga_from_the_north_east():
     r = destination_route("tenerife", 33.6, -8.9)
     assert r == [(28.62, -16.05), (28.465, -16.245)]
+
+
+def test_recent_past_fix_uses_metno_held_back_when_open_meteo_unavailable(conn, cfg):
+    from yachtspeed.weather import FetchError, point_weather
+
+    t0 = utcnow().replace(minute=0, second=0, microsecond=0)
+
+    def handler(url, p):
+        if "api.met.no" in url:  # forecast starts at the current hour, like the real service
+            series = [{"time": (t0 + timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                       "data": {"instant": {"details": {"wind_speed": 5.144, "wind_from_direction": 30.0}}}}
+                      for h in range(24)]
+            return 200, {"properties": {"timeseries": series}}
+        if "marine" in url:
+            return 200, om_body(p)
+        return 429, {"error": True, "reason": "Daily API request limit exceeded."}
+
+    c = client(conn, handler)
+    wx, prov, _ = point_weather(conn, c, cfg, 33.6, -8.4, utcnow() - timedelta(hours=4))
+    assert prov == "metno" and wx["wind_speed_kn"] == pytest.approx(10.0, abs=0.01)
+    with pytest.raises(FetchError):  # more than 12 h back: no fallback
+        point_weather(conn, c, cfg, 33.6, -8.4, utcnow() - timedelta(hours=14))

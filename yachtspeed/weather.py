@@ -292,17 +292,28 @@ def metno_wind(conn, client, clat, clon, when: datetime):
     """MET Norway wind at `when`, blended in time between the surrounding forecast steps
     (hourly to ~60 h, then 6-hourly). Refreshes the cache when it is more than 3 h old."""
     before, after = _metno_rows_around(conn, clat, clon, when)
-    fresh = before or after
+    fresh = before or after or conn.execute(
+        "SELECT * FROM weather_cache WHERE provider='metno' AND kind='wind' AND cell_lat=? AND cell_lon=? "
+        "ORDER BY fetched_utc DESC LIMIT 1", (clat, clon)).fetchone()
     if fresh is None or fresh["fetched_utc"] < iso(utcnow() - timedelta(hours=3)):
         try:
             store_rows(conn, "metno", "wind", clat, clon, fetch_metno(client, clat, clon))
         except (FetchError, QuotaExceeded) as e:
             log(logger, logging.WARNING, "met.no fallback failed", error=str(e))
         before, after = _metno_rows_around(conn, clat, clon, when)
-    if before is None and after is None:
-        return None
+    if before is None:
+        # `when` is before the forecast's first step (MET Norway starts at the current hour):
+        # hold the first step's value back to `when` for up to 12 h (persistence)
+        first = conn.execute(
+            "SELECT * FROM weather_cache WHERE provider='metno' AND kind='wind' AND cell_lat=? AND cell_lon=? "
+            "ORDER BY time_utc LIMIT 1", (clat, clon)).fetchone()
+        t_first = datetime.fromisoformat(first["time_utc"].replace("Z", "+00:00")) if first else None
+        if t_first and timedelta(0) <= t_first - when <= timedelta(hours=12):
+            return {"wind_speed_kn": first["wind_speed_kn"], "wind_dir_from_deg": first["wind_dir_from_deg"]}
     if before is None or after is None or before["time_utc"] == after["time_utc"]:
         r = before or after
+        if r is None:
+            return None
         if abs((datetime.fromisoformat(r["time_utc"].replace("Z", "+00:00")) - when).total_seconds()) > 3 * 3600:
             return None
         return {"wind_speed_kn": r["wind_speed_kn"], "wind_dir_from_deg": r["wind_dir_from_deg"]}
@@ -372,7 +383,9 @@ def _point_at_hour(conn, client, cfg, clat, clon, hour: datetime, wind_provider)
             out.update({c: cached[c] for c in WEATHER_COLS if cached[c] is not None})
             if kind == "wind" and cached["wind_speed_kn"] is not None:
                 used_wind = prov
-        elif kind == "wind" and wind_provider is None and hour >= utcnow() - timedelta(hours=3):
+        elif kind == "wind" and wind_provider is None and hour >= utcnow() - timedelta(hours=12):
+            # live forecast or a recent fix: fall back to MET Norway (held back to the first
+            # forecast step for times before it)
             row = metno_wind(conn, client, clat, clon, hour)
             if row is not None:
                 out.update(row)
