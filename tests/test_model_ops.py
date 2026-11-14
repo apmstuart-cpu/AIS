@@ -223,3 +223,27 @@ def test_check_stream_verdicts(cfg, monkeypatch):
     assert "API key" in bad["verdict"] and bad["messages"] == 0
     good = asyncio.run(run(accept))
     assert good["verdict"].startswith("OK") and good["first_message"]["mmsi"] == 235000001
+
+
+def test_check_stream_parse_summary(cfg, monkeypatch):
+    from yachtspeed import collector
+    from test_ais import CLASS_A, CLASS_B
+
+    monkeypatch.setenv("AISSTREAM_API_KEY", "k")
+
+    async def accept(ws):
+        await ws.recv()
+        await ws.send(json.dumps({"MessageType": "SubscriptionConfirmation"}))
+        for m in (CLASS_A, CLASS_B):
+            await ws.send(json.dumps(m))
+        await asyncio.sleep(3)
+
+    async def run():
+        async with _serve(accept) as server:
+            monkeypatch.setattr(collector, "AISSTREAM_URL", f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}")
+            return await collector.check_stream(cfg, seconds=1, use_filters=False)
+
+    r = asyncio.run(run())
+    p = r["parse"]
+    assert p["ok"] == 2 and p["ignored_types"] == 1 and p["null_sog"] == 1 and p["null_heading"] == 1
+    assert set(p["examples"]) == {"A", "B"} and p["examples"]["A"]["parsed"]["sog_kn"] == 7.4

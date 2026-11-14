@@ -215,6 +215,37 @@ async def discover(cfg, conn, name_fragment: str, minutes: float) -> dict:
     return found
 
 
+def _tally_parse(out, msg, raw, mtype) -> None:
+    """Run live messages through the real parser and summarise what it makes of them."""
+    p = out.setdefault("parse", {"ok": 0, "ignored_types": 0, "rejected": {}, "null_sog": 0, "null_cog": 0,
+                                 "null_heading": 0, "null_ais_second": 0, "class_b_with_nav_status": 0,
+                                 "max_sog_kn": None, "max_provider_lag_s": None, "examples": {}})
+    try:
+        rec = parse_message(msg)
+    except ParseError as e:
+        reason = str(e).split(" ")[0] + " " + " ".join(str(e).split(" ")[1:3])
+        p["rejected"][reason] = p["rejected"].get(reason, 0) + 1
+        return
+    if not isinstance(rec, Position):
+        p["ignored_types"] += 1
+        return
+    p["ok"] += 1
+    p["null_sog"] += rec.sog_kn is None
+    p["null_cog"] += rec.cog_deg is None
+    p["null_heading"] += rec.heading_deg is None
+    p["null_ais_second"] += rec.ais_second is None
+    p["class_b_with_nav_status"] += rec.ais_class == "B" and rec.nav_status is not None
+    if rec.sog_kn is not None:
+        p["max_sog_kn"] = max(p["max_sog_kn"] or 0, rec.sog_kn)
+    lag = (utcnow() - rec.provider_time).total_seconds()
+    p["max_provider_lag_s"] = round(max(p["max_provider_lag_s"] or lag, lag), 1)
+    if rec.ais_class not in p["examples"]:
+        p["examples"][rec.ais_class] = {"raw_body": (msg.get("Message") or {}).get(mtype),
+                                        "raw_time_utc": (msg.get("MetaData") or {}).get("time_utc"),
+                                        "parsed": {k: (iso_ms(v) if k == "provider_time" else v)
+                                                   for k, v in rec.__dict__.items()}}
+
+
 async def check_stream(cfg, seconds: float = 30, use_filters: bool = True) -> dict:
     """Diagnose the AISStream connection: subscribe and report what comes back.
 
@@ -250,6 +281,7 @@ async def check_stream(cfg, seconds: float = 30, use_filters: bool = True) -> di
                 t = msg.get("MessageType", "?")
                 out["types"][t] = out["types"].get(t, 0) + 1
                 out["messages"] += 1
+                _tally_parse(out, msg, raw, t)
                 if out["messages"] == 1:
                     out["first_message"] = {"type": t, "mmsi": (msg.get("MetaData") or {}).get("MMSI"),
                                             "name": (msg.get("MetaData") or {}).get("ShipName")}
