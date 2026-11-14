@@ -1,0 +1,11 @@
+[Unit]
+Description=yachtspeed: pull and import manually captured fixes from the repo
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+# pull as the checkout's owner (uses their GitHub deploy key), import as the service user
+ExecStart=/usr/sbin/runuser -u @OWNER@ -- env HOME=@HOME@ git -C @SRC@ pull --ff-only -q
+ExecStart=/usr/bin/install -o yachtspeed -g yachtspeed -m 640 @SRC@/data/marinetraffic_fixes.csv /var/lib/yachtspeed/marinetraffic_fixes.csv
+ExecStart=/usr/sbin/runuser -u yachtspeed -- env YACHTSPEED_CONFIG=/etc/yachtspeed/config.toml /opt/yachtspeed/.venv/bin/yachtspeed import-csv /var/lib/yachtspeed/marinetraffic_fixes.csv --label marinetraffic

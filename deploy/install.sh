@@ -23,14 +23,18 @@ fi
 chmod 600 /etc/yachtspeed/env; chown root:root /etc/yachtspeed/env
 
 install -m 755 "$SRC/deploy/yachtspeed-wrapper.sh" /usr/local/bin/yachtspeed
-install -m 644 "$SRC"/deploy/systemd/yachtspeed-* /etc/systemd/system/
+install -m 644 "$SRC"/deploy/systemd/yachtspeed-*.service "$SRC"/deploy/systemd/yachtspeed-*.timer /etc/systemd/system/
+# fixes importer: pull this checkout as its owner, import as the service user
+OWNER="$(stat -c %U "$SRC")"; OWNER_HOME="$(getent passwd "$OWNER" | cut -d: -f6)"
+sed -e "s|@SRC@|$SRC|g" -e "s|@OWNER@|$OWNER|g" -e "s|@HOME@|$OWNER_HOME|g" "$SRC/deploy/systemd/yachtspeed-fixes.service.in" \
+  > /etc/systemd/system/yachtspeed-fixes.service
 
 # keep logs across reboots
 mkdir -p /var/log/journal && systemd-tmpfiles --create --prefix /var/log/journal >/dev/null 2>&1 || true
 systemctl restart systemd-journald
 
 systemctl daemon-reload
-systemctl enable --now yachtspeed-backup.timer yachtspeed-yb.timer
+systemctl enable --now yachtspeed-backup.timer yachtspeed-yb.timer yachtspeed-fixes.timer
 systemctl enable yachtspeed-collector yachtspeed-enricher
 systemctl restart yachtspeed-enricher
 if grep -q '^AISSTREAM_API_KEY=.\+' /etc/yachtspeed/env && grep -q '^mmsi = "[0-9]\{9\}"' /etc/yachtspeed/config.toml; then
