@@ -66,7 +66,8 @@ sudo systemctl restart yachtspeed-collector        # after config changes
 * **No live AIS yet**: no AISStream key was available in the build environment, so payload
   shapes follow AISStream's documentation and are checked with `samples` on first run.
 * **ALIBI OF LONDON: MMSI 235099768, call sign 2GQX5**, taken from a MarineTraffic listing (UK flag, 27 × 6 m, pleasure craft / sailing). The 235 prefix is a UK MMSI, which fits. Still to do: confirm against her own static broadcast; `yachtspeed status` flags any name, call sign or length mismatch. The other "ALIBI" MMSIs (232059724, 235088205, 228481000) are different 12–13 m boats.
-* **She was off West Africa in November 2026**, outside the Mediterranean pilot box. A second, Atlantic box (0–50°N, 70°W–7°W) is now configured. Terrestrial AIS coverage off West Africa and mid-Atlantic is thin, so expect long gaps. This is exactly the case where satellite AIS or onboard telemetry is needed.
+* **SORCERESS: MMSI 538071210, call sign V7JW6**, taken from a MarineTraffic listing (Marshall Islands flag, which fits the 538 prefix; 32 × 7 m, sailing). She was near Gibraltar on 2026-11-20, inside the coverage area. Confirm against her own static broadcast.
+* **ALIBI OF LONDON was off West Africa in November 2026**, outside the Mediterranean pilot box. A second, Atlantic box (0–50°N, 70°W–7°W) is now configured. Terrestrial AIS coverage off West Africa and mid-Atlantic is thin, so expect long gaps. This is exactly the case where satellite AIS or onboard telemetry is needed.
 * **Offshore coverage**: AISStream is terrestrial-receiver based. Expect reports near the coast
   and gaps mid-passage, such as the Balearics–Sardinia crossing or Atlantic crossings. Measure
   this before relying on crossings: use the `reports_24h` and position gaps in exports. If it is
