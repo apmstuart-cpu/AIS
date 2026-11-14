@@ -134,3 +134,42 @@ def test_standard_885_is_slower_mostly_upwind():
     assert std(90) == pytest.approx(gt(90) * 0.98, rel=1e-3)
     assert std(150) == pytest.approx(gt(150) * 0.99, rel=1e-3)
     assert (gt(0) - std(0)) / gt(0) > (gt(150) - std(150)) / gt(150)
+
+
+def test_blend_directions_as_vectors():
+    from yachtspeed.weather import blend
+
+    r = blend({"wind_speed_kn": 10, "wind_dir_from_deg": 350}, {"wind_speed_kn": 20, "wind_dir_from_deg": 10}, 0.5)
+    assert r["wind_speed_kn"] == pytest.approx(15) and min(r["wind_dir_from_deg"], 360 - r["wind_dir_from_deg"]) < 0.01
+    r = blend({"wave_height_m": 1.0, "current_speed_kn": None}, {"wave_height_m": 2.0, "current_speed_kn": 0.5}, 0.25)
+    assert r["wave_height_m"] == pytest.approx(1.25) and r["current_speed_kn"] == 0.5
+
+
+def test_point_weather_blends_between_hours(conn, cfg):
+    from yachtspeed.weather import point_weather
+
+    def ramp(u, p):  # wind rises 1 kn per hour
+        return 200, om_body(p, {"wind_speed_10m": [4.0 + h for h in range(24)]} if "wind" in p["hourly"] else None)
+
+    day = (utcnow() + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    wx, _, _ = point_weather(conn, client(conn, ramp), cfg, 33.3, -8.9, day + timedelta(hours=6, minutes=45))
+    assert wx["wind_speed_kn"] == pytest.approx(10.75)
+
+
+def test_metno_six_hourly_steps_are_blended(conn, cfg):
+    from yachtspeed.weather import point_weather
+
+    t0 = (utcnow() + timedelta(days=4)).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    def handler(url, p):
+        if "api.met.no" in url:
+            series = [{"time": (t0 + timedelta(hours=6 * k)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                       "data": {"instant": {"details": {"wind_speed": 5.144 * (1 + k), "wind_from_direction": 90.0}}}}
+                      for k in range(4)]  # 10, 20, 30, 40 kn every 6 h
+            return 200, {"properties": {"timeseries": series}}
+        if "marine" in url:
+            return 200, om_body(p)
+        return 429, {"error": True, "reason": "Daily API request limit exceeded."}
+
+    wx, prov, _ = point_weather(conn, client(conn, handler), cfg, 33.3, -8.9, t0 + timedelta(hours=1, minutes=30))
+    assert prov == "metno" and wx["wind_speed_kn"] == pytest.approx(12.5, abs=0.01)  # 1.5 h of 6 h: 10 -> 20

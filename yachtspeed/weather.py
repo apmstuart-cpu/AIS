@@ -13,6 +13,7 @@ Conventions: wind_direction and wave_direction are FROM; ocean_current_direction
 from __future__ import annotations
 
 import logging
+import math
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -278,37 +279,77 @@ def fetch_metno(client: "OpenMeteo", lat: float, lon: float) -> list[dict]:
     return rows
 
 
-def metno_wind(conn, client, clat, clon, hour: datetime):
-    """Nearest MET Norway wind row within 3 h of `hour`, refreshing the cache when >3 h old."""
-    def nearest():
-        return conn.execute(
-            "SELECT * FROM weather_cache WHERE provider='metno' AND kind='wind' AND cell_lat=? AND cell_lon=? "
-            "AND ABS(julianday(time_utc) - julianday(?)) * 24 <= 3 "
-            "ORDER BY ABS(julianday(time_utc) - julianday(?)) LIMIT 1",
-            (clat, clon, iso(hour), iso(hour))).fetchone()
+def _metno_rows_around(conn, clat, clon, t: datetime):
+    """The cached MET Norway rows at or before and at or after t (at most 6 h apart)."""
+    q = ("SELECT * FROM weather_cache WHERE provider='metno' AND kind='wind' AND cell_lat=? AND cell_lon=? "
+         "AND time_utc {op} ? AND ABS(julianday(time_utc) - julianday(?)) * 24 <= 6 ORDER BY time_utc {order} LIMIT 1")
+    before = conn.execute(q.format(op="<=", order="DESC"), (clat, clon, iso(t), iso(t))).fetchone()
+    after = conn.execute(q.format(op=">=", order="ASC"), (clat, clon, iso(t), iso(t))).fetchone()
+    return before, after
 
-    row = nearest()
-    if row is None or row["fetched_utc"] < iso(utcnow() - timedelta(hours=3)):
+
+def metno_wind(conn, client, clat, clon, when: datetime):
+    """MET Norway wind at `when`, blended in time between the surrounding forecast steps
+    (hourly to ~60 h, then 6-hourly). Refreshes the cache when it is more than 3 h old."""
+    before, after = _metno_rows_around(conn, clat, clon, when)
+    fresh = before or after
+    if fresh is None or fresh["fetched_utc"] < iso(utcnow() - timedelta(hours=3)):
         try:
             store_rows(conn, "metno", "wind", clat, clon, fetch_metno(client, clat, clon))
         except (FetchError, QuotaExceeded) as e:
             log(logger, logging.WARNING, "met.no fallback failed", error=str(e))
-        row = nearest()
-    return row
+        before, after = _metno_rows_around(conn, clat, clon, when)
+    if before is None and after is None:
+        return None
+    if before is None or after is None or before["time_utc"] == after["time_utc"]:
+        r = before or after
+        if abs((datetime.fromisoformat(r["time_utc"].replace("Z", "+00:00")) - when).total_seconds()) > 3 * 3600:
+            return None
+        return {"wind_speed_kn": r["wind_speed_kn"], "wind_dir_from_deg": r["wind_dir_from_deg"]}
+    t0 = datetime.fromisoformat(before["time_utc"].replace("Z", "+00:00"))
+    t1 = datetime.fromisoformat(after["time_utc"].replace("Z", "+00:00"))
+    f = (when - t0).total_seconds() / (t1 - t0).total_seconds()
+    return blend(dict(before), dict(after), f)
 
 
-def point_weather(conn, client, cfg, lat, lon, when: datetime, wind_provider: str | None = None):
-    """Weather at a point/time, fetching (and caching) as needed.
+_VECTOR_PAIRS = [("wind_speed_kn", "wind_dir_from_deg"), ("current_speed_kn", "current_dir_to_deg"),
+                 ("wave_height_m", "wave_dir_from_deg")]
 
-    Returns (values, wind_provider_used, marine_provider) or raises FetchError if no wind
-    is available. For live forecasts (no explicit provider, time not in the past), wind
-    falls back to MET Norway when Open-Meteo fails or its quota is exhausted.
+
+def blend(a: dict, b: dict, f: float) -> dict:
+    """Linear blend of two weather records at fraction f (0 = a, 1 = b).
+
+    Speed/direction pairs are blended as vectors, so 350 -> 010 deg passes through north,
+    and speeds come from the blended vector's length; magnitudes are then rescaled to the
+    linear blend of the speeds so that a pure direction change does not weaken the wind.
+    A field missing on one side takes the other side's value.
     """
-    from .geo import nearest_hour, round_cell
+    out = {}
+    done = set()
+    for mag, ang in _VECTOR_PAIRS:
+        ma, mb, da, db = a.get(mag), b.get(mag), a.get(ang), b.get(ang)
+        done |= {mag, ang}
+        if None in (ma, mb):
+            out[mag] = ma if mb is None else mb
+        else:
+            out[mag] = ma + (mb - ma) * f
+        if None in (da, db):
+            out[ang] = da if db is None else db
+        else:
+            x = (1 - f) * math.cos(math.radians(da)) + f * math.cos(math.radians(db))
+            y = (1 - f) * math.sin(math.radians(da)) + f * math.sin(math.radians(db))
+            out[ang] = (math.degrees(math.atan2(y, x)) + 360) % 360 if (x or y) else da
+    for k in set(a) | set(b):
+        if k in done or k not in WEATHER_COLS:
+            continue
+        va, vb = a.get(k), b.get(k)
+        out[k] = va if vb is None else vb if va is None else va + (vb - va) * f
+    return {k: v for k, v in out.items() if v is not None}
 
-    hour = nearest_hour(when)
+
+def _point_at_hour(conn, client, cfg, clat, clon, hour: datetime, wind_provider):
+    """Weather at an exact UTC hour (Open-Meteo), with MET Norway as live-wind fallback."""
     date = hour.strftime("%Y-%m-%d")
-    clat, clon = round_cell(lat, cfg.cell_deg), round_cell(lon, cfg.cell_deg)
     wprov = wind_provider or wind_provider_for(date, cfg.recent_days)
     out, used_wind, problem = {}, None, None
     for prov, kind in ((wprov, "wind"), ("om_marine", "marine")):
@@ -329,16 +370,40 @@ def point_weather(conn, client, cfg, lat, lon, when: datetime, wind_provider: st
                 problem = f"{prov} unavailable for {date}"
         if cached:
             out.update({c: cached[c] for c in WEATHER_COLS if cached[c] is not None})
-            if kind == "wind":
+            if kind == "wind" and cached["wind_speed_kn"] is not None:
                 used_wind = prov
         elif kind == "wind" and wind_provider is None and hour >= utcnow() - timedelta(hours=3):
             row = metno_wind(conn, client, clat, clon, hour)
             if row is not None:
-                out.update({c: row[c] for c in ("wind_speed_kn", "wind_dir_from_deg") if row[c] is not None})
+                out.update(row)
                 used_wind = "metno"
     if used_wind is None:
         raise FetchError(problem or f"no wind for {date}")
-    return out, used_wind, "om_marine"
+    return out, used_wind
+
+
+def point_weather(conn, client, cfg, lat, lon, when: datetime, wind_provider: str | None = None):
+    """Weather at a point and exact time, blended between the surrounding forecast hours.
+
+    Returns (values, wind_provider_used, marine_provider) or raises FetchError if no wind
+    is available. For live forecasts (no explicit provider, time not in the past), wind
+    falls back to MET Norway when Open-Meteo fails or its quota is exhausted; its 6-hourly
+    steps beyond ~60 h are blended too.
+    """
+    from .geo import round_cell
+
+    clat, clon = round_cell(lat, cfg.cell_deg), round_cell(lon, cfg.cell_deg)
+    when = when.astimezone(timezone.utc)
+    h0 = when.replace(minute=0, second=0, microsecond=0)
+    f = (when - h0).total_seconds() / 3600
+    a, pa = _point_at_hour(conn, client, cfg, clat, clon, h0, wind_provider)
+    if f < 1e-3:
+        return a, pa, "om_marine"
+    try:
+        b, pb = _point_at_hour(conn, client, cfg, clat, clon, h0 + timedelta(hours=1), wind_provider)
+    except FetchError:
+        return a, pa, "om_marine"  # end of the forecast: hold the last hour
+    return blend(a, b, f), (pa if pa == pb else f"{pa}+{pb}"), "om_marine"
 
 
 def sleep_until(t: datetime, max_s: float = 3600) -> None:
