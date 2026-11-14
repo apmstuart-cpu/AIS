@@ -104,6 +104,31 @@ def cmd_samples(cfg, a):
         _print({"msg_type": r["msg_type"], "raw": msg, "parsed": parsed})
 
 
+def cmd_add_fix(cfg, a):
+    """Record a position you read yourself (e.g. from the MarineTraffic app or the crew)."""
+    import re as _re
+    from datetime import timedelta
+
+    from .ais import Position, clean_cog, clean_sog, valid_latlon
+    from .collector import Store
+
+    conn = _conn(cfg)
+    mmsi = _mmsi(cfg, a.yacht)
+    lat, lon = map(float, a.pos.split(","))
+    if not valid_latlon(lat, lon):
+        sys.exit("invalid position")
+    m = _re.fullmatch(r"(\d+)\s*(m|min|h)\s*ago", (a.time or "").strip())
+    when = utcnow() - (timedelta(minutes=int(m[1])) if m[2] in ("m", "min") else timedelta(hours=int(m[1]))) \
+        if m else (parse_iso(a.time) if a.time else utcnow())
+    p = Position(mmsi=mmsi, msg_type="manual", ais_class=None, provider_time=when, lat=lat, lon=lon,
+                 sog_kn=clean_sog(a.sog), cog_deg=clean_cog(a.cog), heading_deg=None, nav_status=None,
+                 ais_second=None, position_accuracy=None)
+    src = f"manual:{a.source}"
+    stored = Store(conn, cfg).store_position(p, source=src)
+    print(f"{'stored' if stored else 'already have a fix in that 10-minute slot for'} {a.yacht} "
+          f"{lat:.4f},{lon:.4f} at {iso(when)} SOG {p.sog_kn} COG {p.cog_deg} [{src}]")
+
+
 def cmd_import(cfg, a):
     from .collector import Store
     from .io_csv import import_csv
@@ -408,6 +433,14 @@ def build_parser():
     s = sub.add_parser("samples", help="show stored raw AIS payloads next to the parsed values")
     s.add_argument("--limit", type=int, default=5)
     s.set_defaults(fn=cmd_samples)
+    s = sub.add_parser("add-fix", help="record a position you read yourself (MarineTraffic app, crew, ...)")
+    s.add_argument("--yacht", required=True)
+    s.add_argument("--pos", required=True, metavar="LAT,LON", help="decimal degrees, e.g. 33.62,-8.38")
+    s.add_argument("--time", help="ISO UTC (2026-11-14T18:03Z) or '6m ago' / '2h ago' (default now)")
+    s.add_argument("--sog", type=float, help="knots")
+    s.add_argument("--cog", type=float, help="degrees true")
+    s.add_argument("--source", default="marinetraffic", help="label stored with the fix")
+    s.set_defaults(fn=cmd_add_fix)
     s = sub.add_parser("import-csv")
     s.add_argument("path")
     s.add_argument("--label")

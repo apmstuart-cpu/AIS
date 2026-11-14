@@ -247,3 +247,17 @@ def test_check_stream_parse_summary(cfg, monkeypatch):
     p = r["parse"]
     assert p["ok"] == 2 and p["ignored_types"] == 1 and p["null_sog"] == 1 and p["null_heading"] == 1
     assert set(p["examples"]) == {"A", "B"} and p["examples"]["A"]["parsed"]["sog_kn"] == 7.4
+
+
+def test_add_fix_cli(conn, cfg, tmp_path, monkeypatch, capsys):
+    from yachtspeed import cli
+
+    cfgfile = tmp_path / "c.toml"
+    cfgfile.write_text(f'db_path = "{cfg.db_path}"\n[[yacht]]\nname = "TESTBOAT"\nmmsi = "235000001"\n')
+    cli.main(["--config", str(cfgfile), "--plain-logs", "add-fix", "--yacht", "testboat", "--pos", "33.62,-8.38",
+              "--time", "6m ago", "--sog", "4.5", "--cog", "238"])
+    cli.main(["--config", str(cfgfile), "--plain-logs", "add-fix", "--yacht", "TESTBOAT", "--pos", "33.6,-8.4",
+              "--time", "2026-11-14T18:03Z"])
+    r = conn.execute("SELECT source, msg_type, sog_kn, cog_deg FROM ais_reports ORDER BY id").fetchall()
+    assert [tuple(x) for x in r] == [("manual:marinetraffic", "manual", 4.5, 238.0),
+                                     ("manual:marinetraffic", "manual", None, None)]
