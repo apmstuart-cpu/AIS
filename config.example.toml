@@ -36,10 +36,11 @@ backup_dir = "/var/lib/yachtspeed/backups"
 backup_keep = 14
 
 # Pilot fleet. Collection only starts for yachts with an MMSI.
-# Verify with: sudo yachtspeed discover ALIBI --minutes 60   (expect length ~27 m)
+# Verify with: sudo yachtspeed discover ALIBI --minutes 60
+#   expect broadcast name "ALIBI OF LONDON", length ~27 m (A+B), UK call sign
 [[yacht]]
-name = "ALIBI"
-model = "Oyster 885S"
+name = "ALIBI OF LONDON"
+model = "Oyster 885S (2013, 27.08 m, UK)"
 mmsi = ""
 verified = false
-notes = "MMSI not yet verified. Public AIS listings named ALIBI found so far do not match a 27 m yacht."
+notes = "MMSI not yet verified. Public listings for plain ALIBI (232059724, 235088205, 228481000) are ~12 m boats, not this yacht."

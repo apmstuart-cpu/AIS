@@ -32,12 +32,12 @@ Upgrade: `git pull && sudo ./deploy/install.sh` (config, key and data are kept).
 yachtspeed status [--json]           last report per yacht, reconnects, backlog, match rate, API use
 yachtspeed samples --limit 5         raw AISStream payloads next to parsed values (parser check)
 yachtspeed discover NAME             list MMSIs broadcasting NAME in the bounding box
-yachtspeed export out.csv [--which enriched|unmatched|all] [--yacht ALIBI] [--since ...]
+yachtspeed export out.csv [--which enriched|unmatched|all] [--yacht "ALIBI OF LONDON"] [--since ...]
 yachtspeed import-csv hist.csv       historical AIS: mmsi,timestamp_utc,lat,lon,sog_kn,cog_deg,heading_deg,nav_status
 yachtspeed enrich --backfill-since 2024-01-01   enrich imported history, then exit
 yachtspeed enrich --once --retry-failed         reset failed weather fetches and retry
-yachtspeed forecast --yacht ALIBI --lat 39.4 --lon 2.9 --time 2026-11-18T10:00Z --course 120 [--distance 60]
-yachtspeed passage --yacht ALIBI --depart 2026-11-18T08:00Z 39.55,2.63 39.0,3.5 38.9,1.4
+yachtspeed forecast --yacht "ALIBI OF LONDON" --lat 39.4 --lon 2.9 --time 2026-11-18T10:00Z --course 120 [--distance 60]
+yachtspeed passage --yacht "ALIBI OF LONDON" --depart 2026-11-18T08:00Z 39.55,2.63 39.0,3.5 38.9,1.4
 yachtspeed evaluate [--method chrono|voyage]     hold-out MAE vs per-yacht median
 yachtspeed backtest-leadtime --days 1 3 5        held-out rows scored with N-day-old wind forecasts
 yachtspeed backtest-passages                     predicted vs actual voyage durations

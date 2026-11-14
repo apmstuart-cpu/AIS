@@ -35,7 +35,7 @@ sudo systemctl restart yachtspeed-collector        # after config changes
 ## Pilot acceptance steps (run on the server)
 
 1. **Verify MMSI**: `sudo yachtspeed discover ALIBI --minutes 60` while ALIBI is in range. Accept
-   only a candidate whose broadcast length is about 27 m and whose call sign matches the
+   only a candidate broadcasting "ALIBI OF LONDON" with a length of about 27 m and whose call sign matches the
    registration. Set `mmsi` and `verified = true`, then restart the collector.
 2. **Live parsing**: after the first reports, run `yachtspeed samples --limit 10` and check SOG
    against what the crew or MarineTraffic shows. Check that Class A rows have a nav status and
@@ -43,10 +43,10 @@ sudo systemctl restart yachtspeed-collector        # after config changes
 3. **Restarts**: `sudo systemctl restart yachtspeed-collector`, then `sudo reboot`. Afterwards,
    `yachtspeed status` should show fresh heartbeats, `connects_24h` up by one each time, and the
    earlier reports still present.
-4. **Sample export**: `yachtspeed export /tmp/alibi.csv --which all --yacht ALIBI`. Check that
+4. **Sample export**: `yachtspeed export /tmp/alibi.csv --which all --yacht "ALIBI OF LONDON"`. Check that
    timestamps are consistent, weather is matched, and gaps are visible in `enrichment_status`
    and `missing_fields`.
-5. **Future lookup**: `yachtspeed forecast --yacht ALIBI ...` returns `status: ok` with a median
+5. **Future lookup**: `yachtspeed forecast --yacht "ALIBI OF LONDON" ...` returns `status: ok` with a median
    once there are 8 or more comparable rows, otherwise `insufficient_support`.
 
 ## Verified in the build environment
@@ -64,7 +64,7 @@ sudo systemctl restart yachtspeed-collector        # after config changes
 
 * **No live AIS yet**: no AISStream key was available in the build environment, so payload
   shapes follow AISStream's documentation and are checked with `samples` on first run.
-* **ALIBI's MMSI is unverified.** Public listings named ALIBI found so far are 12–13 m boats.
+* **ALIBI OF LONDON's MMSI is unverified.** It is the 2013 Oyster 885 (27.08 m, UK build). No public source lists its MMSI. Listings for plain "ALIBI" (232059724, 235088205, 228481000) are 12–13 m boats; do not use them.
 * **Offshore coverage**: AISStream is terrestrial-receiver based. Expect reports near the coast
   and gaps mid-passage, such as the Balearics–Sardinia crossing or Atlantic crossings. Measure
   this before relying on crossings: use the `reports_24h` and position gaps in exports. If it is
