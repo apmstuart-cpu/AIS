@@ -167,6 +167,13 @@ DESTINATIONS = {
         "via_if_north_east_of": (29.3, -13.3),
         "via": [(29.05, -13.35), (28.80, -13.72)],
     },
+    "tenerife": {
+        "name": "Marina Santa Cruz de Tenerife",
+        "point": (28.465, -16.245),
+        # from the north-east: round Punta de Anaga, keeping off the north coast
+        "via_if_north_east_of": (29.0, -16.0),
+        "via": [(28.62, -16.05)],
+    },
     "las-palmas": {
         "name": "Muelle Deportivo, Las Palmas de Gran Canaria",
         "point": (28.130, -15.418),

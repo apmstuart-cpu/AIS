@@ -217,6 +217,11 @@ def cmd_passage(cfg, a):
     y = next((y for y in cfg.fleet if y.mmsi == mmsi), None)
     a.speed_table = a.speed_table or (y.speed_table if y and y.speed_table else "cruiser27")
     a.polar_factor = a.polar_factor if a.polar_factor is not None else (y.polar_factor if y else 1.0)
+    if a.motor_below is None and y and y.motor_below_kn and not a.no_motor:
+        a.motor_below = y.motor_below_kn
+        a.motor_speed = a.motor_speed if a.motor_speed is not None else (y.motor_speed_kn or 7.0)
+    if a.motor_speed is None:
+        a.motor_speed = 7.0
     table = None if a.speed_table == "none" else a.speed_table
     try:
         r = passage_forecast(conn, cfg, _client(conn, cfg), model, mmsi, wps, depart, a.step_nm,
@@ -479,7 +484,8 @@ def build_parser():
     s.add_argument("--polar-factor", type=float, help="scale the speed table, e.g. 0.85 (default: config, else 1)")
     s.add_argument("--no-current", action="store_true", help="ignore ocean current")
     s.add_argument("--motor-below", type=float, help="motor when sailing speed is below this (default: never)")
-    s.add_argument("--motor-speed", type=float, default=7.0)
+    s.add_argument("--motor-speed", type=float, help="motoring speed (default: config, else 7)")
+    s.add_argument("--no-motor", action="store_true", help="ignore the yacht's configured motoring")
     s.add_argument("--wind-provider")
     s.add_argument("--steps", action="store_true", help="show every step")
     s.add_argument("--no-store", action="store_true")

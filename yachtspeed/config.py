@@ -27,6 +27,8 @@ class Yacht:
     yb_team: str = ""  # team name on the tracker if it differs from `name`
     speed_table: str = ""  # fallback polar for passages, e.g. "oyster885gt_orc"
     polar_factor: float = 1.0  # scale for speed_table (racing VPP -> cruising)
+    motor_below_kn: float | None = None  # passages: motor when sailing would be slower than this
+    motor_speed_kn: float | None = None  # passages: motoring speed
 
 
 @dataclass

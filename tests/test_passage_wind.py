@@ -173,3 +173,8 @@ def test_metno_six_hourly_steps_are_blended(conn, cfg):
 
     wx, prov, _ = point_weather(conn, client(conn, handler), cfg, 33.3, -8.9, t0 + timedelta(hours=1, minutes=30))
     assert prov == "metno" and wx["wind_speed_kn"] == pytest.approx(12.5, abs=0.01)  # 1.5 h of 6 h: 10 -> 20
+
+
+def test_tenerife_route_rounds_anaga_from_the_north_east():
+    r = destination_route("tenerife", 33.6, -8.9)
+    assert r == [(28.62, -16.05), (28.465, -16.245)]
