@@ -230,6 +230,10 @@ def _tally_parse(out, msg, raw, mtype) -> None:
         p["ignored_types"] += 1
         return
     p["ok"] += 1
+    out.setdefault("_mmsis", set()).add(rec.mmsi)
+    b = out.setdefault("positions_seen", {"lat_min": rec.lat, "lat_max": rec.lat, "lon_min": rec.lon, "lon_max": rec.lon})
+    b["lat_min"], b["lat_max"] = min(b["lat_min"], rec.lat), max(b["lat_max"], rec.lat)
+    b["lon_min"], b["lon_max"] = min(b["lon_min"], rec.lon), max(b["lon_max"], rec.lon)
     p["null_sog"] += rec.sog_kn is None
     p["null_cog"] += rec.cog_deg is None
     p["null_heading"] += rec.heading_deg is None
@@ -288,6 +292,7 @@ async def check_stream(cfg, seconds: float = 30, use_filters: bool = True) -> di
     except Exception as e:
         out["error"] = f"{type(e).__name__}: {e}"
         out["closed_after_s"] = round(time.monotonic() - t0, 2)
+    out["distinct_vessels"] = len(out.pop("_mmsis", set()))
     if out["messages"]:
         out["verdict"] = "OK: key accepted and data is flowing"
     elif out["closed_after_s"] is not None and out["closed_after_s"] < 5:

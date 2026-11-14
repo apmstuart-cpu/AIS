@@ -79,7 +79,14 @@ def cmd_discover(cfg, a):
 def cmd_check_stream(cfg, a):
     from .collector import check_stream
 
-    _print(asyncio.run(check_stream(cfg, a.seconds, use_filters=not a.all)))
+    if a.box:
+        la1, lo1, la2, lo2 = map(float, a.box.split(","))
+        cfg.bounding_boxes = [[[min(la1, la2), min(lo1, lo2)], [max(la1, la2), max(lo1, lo2)]]]
+        a.all = True
+    r = asyncio.run(check_stream(cfg, a.seconds, use_filters=not a.all))
+    if a.box:
+        r["box"] = cfg.bounding_boxes[0]
+    _print(r)
 
 
 def cmd_samples(cfg, a):
@@ -395,6 +402,8 @@ def build_parser():
     s = sub.add_parser("check-stream", help="test the AISStream key and connection")
     s.add_argument("--seconds", type=float, default=30)
     s.add_argument("--all", action="store_true", help="no MMSI filter: any vessel in the boxes")
+    s.add_argument("--box", metavar="LAT1,LON1,LAT2,LON2",
+                   help="test coverage in this area only (implies --all), e.g. 32,-10,35,-7 off Casablanca")
     s.set_defaults(fn=cmd_check_stream)
     s = sub.add_parser("samples", help="show stored raw AIS payloads next to the parsed values")
     s.add_argument("--limit", type=int, default=5)
