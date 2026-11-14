@@ -9,7 +9,7 @@ import random
 import signal
 
 from . import db
-from .ais import SUBSCRIBE_TYPES, STATIC_TYPES, ParseError, Position, Static, parse_message
+from .ais import POSITION_TYPES, SUBSCRIBE_TYPES, STATIC_TYPES, ParseError, Position, Static, parse_message
 from .geo import bucket_start, iso, iso_ms, utcnow
 from .logutil import log
 
@@ -132,6 +132,8 @@ async def run_collector(cfg, conn, stop: asyncio.Event | None = None) -> None:
     hb = asyncio.create_task(heartbeat_loop())
     try:
         while not stop.is_set():
+            loop = asyncio.get_running_loop()
+            connected_at, got_data = None, False
             try:
                 async with websockets.connect(
                     AISSTREAM_URL, ping_interval=20, ping_timeout=30, close_timeout=5, max_size=2**20
@@ -139,10 +141,11 @@ async def run_collector(cfg, conn, stop: asyncio.Event | None = None) -> None:
                     await ws.send(json.dumps(subscription(cfg, key, mmsis)))
                     db.log_event(conn, "collector", "connected")
                     log(logger, logging.INFO, "connected", mmsis=mmsis)
-                    backoff = 1.0
+                    connected_at = loop.time()
                     async for raw in ws:
                         if stop.is_set():
                             break
+                        got_data = True
                         store.handle(raw)
                     if not stop.is_set():
                         db.log_event(conn, "collector", "disconnect", f"server closed: {ws.close_code}")
@@ -158,6 +161,16 @@ async def run_collector(cfg, conn, stop: asyncio.Event | None = None) -> None:
                 log(logger, logging.WARNING, "disconnected", error=f"{type(e).__name__}: {e}")
             if stop.is_set():
                 break
+            lasted = loop.time() - connected_at if connected_at is not None else 0.0
+            if got_data or lasted >= 60:
+                backoff = 1.0  # a healthy session: reconnect quickly
+            elif connected_at is not None and lasted < 5:
+                # AISStream drops a subscription it rejects (usually a bad API key) without
+                # an error message; don't hammer it.
+                backoff = max(backoff, 30.0)
+                db.log_event(conn, "collector", "early_close", {"seconds": round(lasted, 2)})
+                log(logger, logging.ERROR, "server closed right after subscribing; check AISSTREAM_API_KEY "
+                    "(run: yachtspeed check-stream)", seconds=round(lasted, 2))
             delay = backoff * (0.5 + random.random())
             db.log_event(conn, "collector", "reconnect", {"delay_s": round(delay, 1)})
             try:
@@ -200,6 +213,60 @@ async def discover(cfg, conn, name_fragment: str, minutes: float) -> dict:
                 }
                 log(logger, logging.INFO, "candidate", mmsi=rec.mmsi, **found[rec.mmsi])
     return found
+
+
+async def check_stream(cfg, seconds: float = 30, use_filters: bool = True) -> dict:
+    """Diagnose the AISStream connection: subscribe and report what comes back.
+
+    With use_filters=False it subscribes to all position reports in the configured boxes
+    (busy in the Med), which separates key problems from 'our yachts are just quiet'.
+    """
+    import time
+
+    import websockets
+
+    key = cfg.aisstream_key
+    out = {"key_present": bool(key), "key_length": len(key or ""),
+           "key_has_whitespace_or_quotes": bool(key) and (key != key.strip() or key[:1] in "'\""),
+           "filters": use_filters, "messages": 0, "types": {}, "closed_after_s": None, "error": None}
+    if not key:
+        out["error"] = "AISSTREAM_API_KEY not set"
+        return out
+    sub = subscription(cfg, key, cfg.mmsis if use_filters else None,
+                       None if use_filters else list(POSITION_TYPES))
+    t0 = time.monotonic()
+    try:
+        async with websockets.connect(AISSTREAM_URL, ping_interval=20, close_timeout=5) as ws:
+            await ws.send(json.dumps(sub))
+            while time.monotonic() - t0 < seconds:
+                try:
+                    raw = await asyncio.wait_for(ws.recv(), timeout=seconds - (time.monotonic() - t0))
+                except asyncio.TimeoutError:
+                    break
+                msg = json.loads(raw)
+                if "error" in msg:
+                    out["error"] = f"provider: {msg['error']}"
+                    break
+                t = msg.get("MessageType", "?")
+                out["types"][t] = out["types"].get(t, 0) + 1
+                out["messages"] += 1
+                if out["messages"] == 1:
+                    out["first_message"] = {"type": t, "mmsi": (msg.get("MetaData") or {}).get("MMSI"),
+                                            "name": (msg.get("MetaData") or {}).get("ShipName")}
+    except Exception as e:
+        out["error"] = f"{type(e).__name__}: {e}"
+        out["closed_after_s"] = round(time.monotonic() - t0, 2)
+    if out["messages"]:
+        out["verdict"] = "OK: key accepted and data is flowing"
+    elif out["closed_after_s"] is not None and out["closed_after_s"] < 5:
+        out["verdict"] = ("AISStream closed the connection immediately: the API key is almost certainly "
+                          "invalid, expired or mistyped (check /etc/yachtspeed/env)")
+    elif use_filters:
+        out["verdict"] = ("connection stayed open but no messages: key probably fine, the yachts are simply "
+                          "not being heard. Re-run with --all to confirm data flows")
+    else:
+        out["verdict"] = "connection open but no traffic at all: possible AISStream outage"
+    return out
 
 
 def main(cfg, conn) -> None:

@@ -161,3 +161,65 @@ def test_status_flags_identity_mismatch(conn, cfg):
     y = status(conn, cfg)["yachts"][0]
     assert len(y["identity_mismatch"]) == 2
     assert "IDENTITY MISMATCH" in format_text(status(conn, cfg))
+
+
+def _serve(handler):
+    import websockets
+    return websockets.serve(handler, "127.0.0.1", 0)
+
+
+def test_early_close_sets_long_backoff(conn, cfg, monkeypatch):
+    from yachtspeed import collector
+
+    monkeypatch.setenv("AISSTREAM_API_KEY", "bad")
+    stop = asyncio.Event()
+    attempts = []
+
+    async def handler(ws):
+        await ws.recv()
+        attempts.append(1)
+        ws.transport.abort()
+
+    async def stopper():
+        while not conn.execute("SELECT 1 FROM service_events WHERE event='early_close'").fetchone():
+            await asyncio.sleep(0.05)
+        await asyncio.sleep(0.2)
+        stop.set()
+
+    async def run():
+        async with _serve(handler) as server:
+            port = server.sockets[0].getsockname()[1]
+            monkeypatch.setattr(collector, "AISSTREAM_URL", f"ws://127.0.0.1:{port}")
+            await asyncio.wait_for(asyncio.gather(collector.run_collector(cfg, conn, stop), stopper()), timeout=20)
+
+    asyncio.run(run())
+    assert len(attempts) == 1  # no rapid second attempt
+    delay = json.loads(conn.execute(
+        "SELECT detail FROM service_events WHERE event='reconnect' ORDER BY id LIMIT 1").fetchone()[0])["delay_s"]
+    assert delay >= 15
+
+
+def test_check_stream_verdicts(cfg, monkeypatch):
+    from yachtspeed import collector
+    from test_ais import CLASS_A
+
+    monkeypatch.setenv("AISSTREAM_API_KEY", "k")
+
+    async def reject(ws):
+        await ws.recv()
+        ws.transport.abort()
+
+    async def accept(ws):
+        await ws.recv()
+        await ws.send(json.dumps(CLASS_A))
+        await asyncio.sleep(3)
+
+    async def run(handler):
+        async with _serve(handler) as server:
+            monkeypatch.setattr(collector, "AISSTREAM_URL", f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}")
+            return await collector.check_stream(cfg, seconds=1)
+
+    bad = asyncio.run(run(reject))
+    assert "API key" in bad["verdict"] and bad["messages"] == 0
+    good = asyncio.run(run(accept))
+    assert good["verdict"].startswith("OK") and good["first_message"]["mmsi"] == 235000001

@@ -76,6 +76,12 @@ def cmd_discover(cfg, a):
     _print(asyncio.run(discover(cfg, _conn(cfg), a.name, a.minutes)))
 
 
+def cmd_check_stream(cfg, a):
+    from .collector import check_stream
+
+    _print(asyncio.run(check_stream(cfg, a.seconds, use_filters=not a.all)))
+
+
 def cmd_samples(cfg, a):
     conn = _conn(cfg)
     from .ais import parse_message
@@ -258,6 +264,10 @@ def build_parser():
     s.add_argument("name")
     s.add_argument("--minutes", type=float, default=30)
     s.set_defaults(fn=cmd_discover)
+    s = sub.add_parser("check-stream", help="test the AISStream key and connection")
+    s.add_argument("--seconds", type=float, default=30)
+    s.add_argument("--all", action="store_true", help="no MMSI filter: any vessel in the boxes")
+    s.set_defaults(fn=cmd_check_stream)
     s = sub.add_parser("samples", help="show stored raw AIS payloads next to the parsed values")
     s.add_argument("--limit", type=int, default=5)
     s.set_defaults(fn=cmd_samples)
