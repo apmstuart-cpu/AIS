@@ -84,6 +84,9 @@ sudo systemctl restart yachtspeed-collector        # after config changes
   2013 885 (not GT), so the config applies `polar_factor = 0.85` until her own AIS/YB history
   can calibrate it. ORC Sailor Services sells speed guides if a certificate for ALIBI herself
   is ever wanted.
+* `oyster885_std`: BABIANA's polar adjusted for the standard 885's less efficient keel, since
+  the rig is similar. Upwind VMG −7% with a beat angle 2° wider, −5% at 52–60°, tapering to
+  −1% from 110° downwind. This is judgement, not measurement. ALIBI uses it with `polar_factor = 0.85`.
 * `cruiser27`: a generic assumption, no spinnaker.
 
 ## Not yet verified / known limitations

@@ -125,3 +125,12 @@ def test_passage_adds_along_course_current(conn, cfg):
     s1, s0 = with_c["steps"][0], without["steps"][0]
     assert s1["current_kn"] == pytest.approx(1.0, abs=0.05)
     assert s1["speed_kn"] - s0["speed_kn"] == pytest.approx(1.0, abs=0.05)
+
+
+def test_standard_885_is_slower_mostly_upwind():
+    gt = lambda a: table_speed(12, a, "oyster885gt_orc")  # noqa: E731
+    std = lambda a: table_speed(12, a, "oyster885_std")  # noqa: E731
+    assert std(0) == pytest.approx(gt(0) * 0.93, rel=1e-3)
+    assert std(90) == pytest.approx(gt(90) * 0.98, rel=1e-3)
+    assert std(150) == pytest.approx(gt(150) * 0.99, rel=1e-3)
+    assert (gt(0) - std(0)) / gt(0) > (gt(150) - std(150)) / gt(150)

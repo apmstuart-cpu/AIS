@@ -55,7 +55,41 @@ _CRUISER27 = {
     "source": "generic assumption",
 }
 
-TABLES = {"cruiser27": _CRUISER27, "oyster885gt_orc": _ORC_885GT}
+def _derive(base, speed_scale_by_angle, beat_vmg_scale, beat_angle_add, source):
+    """A sister-ship variant of a table: per-angle speed scale (interpolated) and a
+    separate upwind adjustment."""
+    angs = sorted(speed_scale_by_angle)
+
+    def scale(a):
+        if a <= angs[0]:
+            return speed_scale_by_angle[angs[0]]
+        if a >= angs[-1]:
+            return speed_scale_by_angle[angs[-1]]
+        for x, y in zip(angs, angs[1:]):
+            if x <= a <= y:
+                return speed_scale_by_angle[x] + (speed_scale_by_angle[y] - speed_scale_by_angle[x]) * (a - x) / (y - x)
+
+    out = {k: v for k, v in base.items() if k not in ("speeds", "beat_vmg", "beat_angle", "run_vmg", "source")}
+    out["speeds"] = {a: [round(v * scale(a), 3) for v in vals] for a, vals in base["speeds"].items()}
+    out["beat_vmg"] = [round(v * beat_vmg_scale, 3) for v in base["beat_vmg"]]
+    out["beat_angle"] = [round(v + beat_angle_add, 1) for v in base["beat_angle"]]
+    out["run_vmg"] = [round(v * scale(180), 3) for v in base["run_vmg"]]
+    out["source"] = source
+    return out
+
+
+# Standard Oyster 885 (e.g. ALIBI OF LONDON, 2013): same rig as BABIANA but a less efficient
+# keel than the GT. Keel differences mostly cost pointing and upwind speed, fading off the
+# wind. These scales are a JUDGEMENT, not measured; calibrate against her own track data.
+_OYSTER885_STD = _derive(
+    _ORC_885GT,
+    speed_scale_by_angle={52: 0.95, 60: 0.95, 75: 0.97, 90: 0.98, 110: 0.99, 180: 0.99},
+    beat_vmg_scale=0.93, beat_angle_add=2.0,
+    source="derived from Oyster 885 GT BABIANA ORC VPP: upwind VMG -7%, beat angle +2 deg, "
+           "-5% at 52-60 deg tapering to -1% from 110 deg (keel difference; judgement)",
+)
+
+TABLES = {"cruiser27": _CRUISER27, "oyster885gt_orc": _ORC_885GT, "oyster885_std": _OYSTER885_STD}
 DEFAULT_TABLE = "cruiser27"
 
 
