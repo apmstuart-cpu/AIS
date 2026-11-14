@@ -57,7 +57,17 @@ def point_forecast(conn, cfg, client, model: SogModel, mmsi, lat, lon, when: dat
 
 
 def passage_forecast(conn, cfg, client, model: SogModel, mmsi, waypoints, departure: datetime,
-                     step_nm=10.0, issue=None, wind_provider=None, store=True) -> dict:
+                     step_nm=10.0, issue=None, wind_provider=None, store=True, speed_table=None,
+                     motor_below_kn=None, motor_speed_kn=None) -> dict:
+    """Propagate a passage step by step.
+
+    Speed per step, in order of preference: the yacht's SOG model; else `speed_table`
+    (a generic polar, see speedtable.py) if given; else the yacht's median SOG.
+    If `motor_below_kn` is set, steps slower than that are motored at `motor_speed_kn`.
+    Leave it unset for a yacht that cannot motor.
+    """
+    from .speedtable import table_speed
+
     if len(waypoints) < 2:
         raise ValueError("need at least two waypoints")
     pid = uuid.uuid4().hex[:12]
@@ -83,15 +93,27 @@ def passage_forecast(conn, cfg, client, model: SogModel, mmsi, waypoints, depart
                 flags.append("weak_support")
             elif r.get("n_matches", 0) < 2 * cfg.min_matches:
                 flags.append("thin_support")
-            if speed is None or speed <= 0.5:
-                speed = fallback
+            source = "model" if speed else None
+            if (speed is None or speed <= 0.5) and speed_table and r.get("wind_speed_kn") is not None:
+                speed, source = table_speed(r["wind_speed_kn"], r["twa_deg"], speed_table), "speed_table"
+                flags.append("speed_table")
+            if (speed is None or speed <= 0.5) and source != "speed_table" and fallback:
+                speed, source = fallback, "yacht_median"
                 flags.append("fallback_yacht_median")
-            if not speed:
-                raise ValueError(f"no historical data for {mmsi}; cannot propagate passage")
+            if speed is None:
+                raise ValueError(f"no history or speed table for {mmsi} and no forecast at step {idx}; "
+                                 "cannot propagate passage")
+            if motor_below_kn and speed < motor_below_kn:
+                speed, source = motor_speed_kn, "motor"
+                flags.append("motoring")
+            if speed < 1.0:
+                flags.append("becalmed")
+            speed = max(speed, 0.3)
             hours = dist / speed
             steps.append({"idx": idx, "leg": leg, "start_utc": iso(t), "lat": round(mid[0], 4),
                           "lon": round(mid[1], 4), "course_deg": round(course, 1), "distance_nm": round(dist, 2),
-                          "speed_kn": round(speed, 2), "hours": round(hours, 2), "flags": flags,
+                          "speed_kn": round(speed, 2), "speed_source": source, "hours": round(hours, 2),
+                          "flags": flags,
                           "tws_kn": r.get("wind_speed_kn"), "twa_deg": r.get("twa_deg"),
                           "wave_m": r.get("wave_height_m"), "n_matches": r.get("n_matches")})
             t = t + timedelta(hours=hours)
@@ -102,6 +124,8 @@ def passage_forecast(conn, cfg, client, model: SogModel, mmsi, waypoints, depart
         "passage_id": pid, "mmsi": mmsi, "departure_utc": iso(departure), "arrival_utc": iso(t),
         "duration_hours": round((t - departure).total_seconds() / 3600, 2), "distance_nm": round(total_nm, 1),
         "steps": steps, "flagged_steps": len(flagged),
+        "hours_by_speed_source": {k: round(sum(s["hours"] for s in steps if s["speed_source"] == k), 1)
+                                  for k in {s["speed_source"] for s in steps}},
         "flagged_distance_share": round(sum(s["distance_nm"] for s in flagged) / total_nm, 3) if total_nm else 0,
     }
 
@@ -140,3 +164,39 @@ def backtest_voyages(conn, cfg, client, obs, min_hours=6.0, step_nm=10.0, max_vo
                     "error_hours": round(p["duration_hours"] - hours, 2),
                     "flagged_distance_share": p["flagged_distance_share"]})
     return out
+
+
+def wind_ahead(conn, cfg, client, lat, lon, course, sog, start: datetime, threshold=10.0, hours=72,
+               step_h=1.0, below=False) -> dict:
+    """Dead-reckon from a position at constant course/speed and report the forecast wind
+    along the way, and the first time it reaches `threshold` (or drops below it if `below`)."""
+    from .geo import EARTH_RADIUS_NM
+    import math
+
+    def dest(la, lo, brg, nm):
+        d, b = nm / EARTH_RADIUS_NM, math.radians(brg)
+        p1, l1 = math.radians(la), math.radians(lo)
+        p2 = math.asin(math.sin(p1) * math.cos(d) + math.cos(p1) * math.sin(d) * math.cos(b))
+        l2 = l1 + math.atan2(math.sin(b) * math.sin(d) * math.cos(p1), math.cos(d) - math.sin(p1) * math.sin(p2))
+        return math.degrees(p2), math.degrees(l2)
+
+    track, first = [], None
+    n = int(hours / step_h)
+    for i in range(n + 1):
+        t = start + timedelta(hours=i * step_h)
+        la, lo = dest(lat, lon, course, sog * i * step_h)
+        try:
+            wx, prov, _ = point_weather(conn, client, cfg, la, lo, t)
+        except FetchError:
+            track.append({"time_utc": iso(t), "lat": round(la, 3), "lon": round(lo, 3), "status": "no_forecast"})
+            continue
+        ws, wd = wx.get("wind_speed_kn"), wx.get("wind_dir_from_deg")
+        row = {"time_utc": iso(t), "lat": round(la, 3), "lon": round(lo, 3),
+               "wind_kn": round(ws, 1) if ws is not None else None, "wind_from_deg": wd,
+               "wave_m": wx.get("wave_height_m"), "provider": prov}
+        track.append(row)
+        if first is None and ws is not None and ((ws < threshold) if below else (ws >= threshold)):
+            first = row
+    return {"start_utc": iso(start), "from": [lat, lon], "course_deg": course, "sog_kn": sog,
+            "threshold_kn": threshold, "condition": "below" if below else "at_or_above",
+            "first": first, "track": track}

@@ -249,10 +249,60 @@ def lookup(conn, provider, kind, cell_lat, cell_lon, hour_iso):
     ).fetchone()
 
 
+METNO_URL = "https://api.met.no/weatherapi/locationforecast/2.0/compact"
+
+
+def fetch_metno(client: "OpenMeteo", lat: float, lon: float) -> list[dict]:
+    """MET Norway locationforecast (ECMWF-based, global): hourly to ~60 h, then 6-hourly.
+
+    Used only as a fallback for future wind when Open-Meteo is unavailable. Free; their
+    terms require an identifying User-Agent and modest request rates.
+    """
+    client.budget.check_and_count("api.met.no")
+    try:
+        r = client.http.get(METNO_URL, params={"lat": f"{lat:.2f}", "lon": f"{lon:.2f}"}, timeout=client.timeout,
+                            headers={"User-Agent": "yachtspeed/0.2 personal yacht research"})
+    except requests.RequestException as e:
+        raise FetchError(f"met.no network: {e}") from e
+    if r.status_code != 200:
+        raise FetchError(f"met.no HTTP {r.status_code}")
+    rows = []
+    for ts in r.json().get("properties", {}).get("timeseries", []):
+        d = ts.get("data", {}).get("instant", {}).get("details", {})
+        if "wind_speed" in d:
+            rows.append({"time_utc": ts["time"], "grid_lat": lat, "grid_lon": lon,
+                         "wind_speed_kn": to_knots(d["wind_speed"], "m/s"),
+                         "wind_dir_from_deg": d.get("wind_from_direction"), "wind_gust_kn": None})
+    if not rows:
+        raise FetchError("met.no returned no wind data")
+    return rows
+
+
+def metno_wind(conn, client, clat, clon, hour: datetime):
+    """Nearest MET Norway wind row within 3 h of `hour`, refreshing the cache when >3 h old."""
+    def nearest():
+        return conn.execute(
+            "SELECT * FROM weather_cache WHERE provider='metno' AND kind='wind' AND cell_lat=? AND cell_lon=? "
+            "AND ABS(julianday(time_utc) - julianday(?)) * 24 <= 3 "
+            "ORDER BY ABS(julianday(time_utc) - julianday(?)) LIMIT 1",
+            (clat, clon, iso(hour), iso(hour))).fetchone()
+
+    row = nearest()
+    if row is None or row["fetched_utc"] < iso(utcnow() - timedelta(hours=3)):
+        try:
+            store_rows(conn, "metno", "wind", clat, clon, fetch_metno(client, clat, clon))
+        except (FetchError, QuotaExceeded) as e:
+            log(logger, logging.WARNING, "met.no fallback failed", error=str(e))
+        row = nearest()
+    return row
+
+
 def point_weather(conn, client, cfg, lat, lon, when: datetime, wind_provider: str | None = None):
     """Weather at a point/time, fetching (and caching) as needed.
 
-    Returns (dict of values, wind_provider, marine_provider) or raises FetchError.
+    Returns (values, wind_provider_used, marine_provider) or raises FetchError if no wind
+    is available. For live forecasts (no explicit provider, time not in the past), wind
+    falls back to MET Norway when Open-Meteo fails or its quota is exhausted.
     """
     from .geo import nearest_hour, round_cell
 
@@ -260,24 +310,35 @@ def point_weather(conn, client, cfg, lat, lon, when: datetime, wind_provider: st
     date = hour.strftime("%Y-%m-%d")
     clat, clon = round_cell(lat, cfg.cell_deg), round_cell(lon, cfg.cell_deg)
     wprov = wind_provider or wind_provider_for(date, cfg.recent_days)
-    out = {}
+    out, used_wind, problem = {}, None, None
     for prov, kind in ((wprov, "wind"), ("om_marine", "marine")):
-        # live forecasts change with each model run, so refresh anything fetched >3h ago
         cached = lookup(conn, prov, kind, clat, clon, iso(hour))
+        # live forecasts change with each model run, so refresh anything fetched >3h ago
         stale = cached is None or (
             prov == "om_forecast" and hour > utcnow()
             and cached["fetched_utc"] < iso(utcnow() - timedelta(hours=3))
         )
         if stale:
-            st = ensure_cell_day(conn, client, prov, kind, clat, clon, date, cfg.max_fetch_attempts, force=True)
-            if st != "ok":
-                if kind == "wind":
-                    raise FetchError(f"{prov} unavailable for {date}")
-                continue
-            cached = lookup(conn, prov, kind, clat, clon, iso(hour))
+            try:
+                st = ensure_cell_day(conn, client, prov, kind, clat, clon, date, cfg.max_fetch_attempts, force=True)
+            except QuotaExceeded as e:
+                st, problem = "quota", str(e)
+            fresh = lookup(conn, prov, kind, clat, clon, iso(hour)) if st == "ok" else None
+            cached = fresh or cached
+            if st != "ok" and kind == "wind" and not problem:
+                problem = f"{prov} unavailable for {date}"
         if cached:
             out.update({c: cached[c] for c in WEATHER_COLS if cached[c] is not None})
-    return out, wprov, "om_marine"
+            if kind == "wind":
+                used_wind = prov
+        elif kind == "wind" and wind_provider is None and hour >= utcnow() - timedelta(hours=3):
+            row = metno_wind(conn, client, clat, clon, hour)
+            if row is not None:
+                out.update({c: row[c] for c in ("wind_speed_kn", "wind_dir_from_deg") if row[c] is not None})
+                used_wind = "metno"
+    if used_wind is None:
+        raise FetchError(problem or f"no wind for {date}")
+    return out, used_wind, "om_marine"
 
 
 def sleep_until(t: datetime, max_s: float = 3600) -> None:

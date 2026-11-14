@@ -37,7 +37,12 @@ yachtspeed import-csv hist.csv       historical AIS: mmsi,timestamp_utc,lat,lon,
 yachtspeed enrich --backfill-since 2024-01-01   enrich imported history, then exit
 yachtspeed enrich --once --retry-failed         reset failed weather fetches and retry
 yachtspeed forecast --yacht "ALIBI OF LONDON" --lat 39.4 --lon 2.9 --time 2026-11-18T10:00Z --course 120 [--distance 60]
-yachtspeed passage --yacht "ALIBI OF LONDON" --depart 2026-11-18T08:00Z 39.55,2.63 39.0,3.5 38.9,1.4
+yachtspeed passage --yacht "ALIBI OF LONDON" --to rubicon            ETA from latest position, sailing only
+yachtspeed passage --yacht X --to rubicon --from 33.62,-8.38 --at 2026-11-14T18:03Z   from a position you supply
+yachtspeed passage --yacht X --depart 2026-11-18T08:00Z 39.55,2.63 39.0,3.5   explicit waypoints
+      (--motor-below 6 --motor-speed 7 to allow motoring; --speed-table none to disable the fallback polar)
+yachtspeed wind-ahead --yacht "ALIBI OF LONDON" --threshold 10    when will she reach 10 kn on current course/speed
+yachtspeed wind-ahead --yacht X --from 33.62,-8.38 --course 238 --speed 4.5 [--below]
 yachtspeed evaluate [--method chrono|voyage]     hold-out MAE vs per-yacht median
 yachtspeed backtest-leadtime --days 1 3 5        held-out rows scored with N-day-old wind forecasts
 yachtspeed backtest-passages                     predicted vs actual voyage durations
@@ -68,6 +73,15 @@ then imports its track every 3 hours, and re-runs are de-duplicated. YB provides
 and time only. SOG and COG are **made good** from the fix at least 10 minutes earlier
 (typically 1–6 h offshore), so they read low when the yacht tacks or gybes between fixes.
 Rows carry `source = yb:<race>` and are weather-matched like AIS rows.
+
+## Passage speed when history is thin
+
+With fewer than 8 comparable observations, `passage` uses a generic speed table
+(`cruiser27`, a rough polar for a ~27 m cruiser, in `yachtspeed/speedtable.py`) and flags
+those steps `[speed_table]`. It never motors unless `--motor-below` is given. Live wind
+comes from Open-Meteo, with a MET Norway fallback when Open-Meteo fails or its quota is
+used. Named destinations (`rubicon`, `las-palmas`) include approach points that keep the
+straight-line model off land. They are planning aids, not navigational advice.
 
 ## Model
 

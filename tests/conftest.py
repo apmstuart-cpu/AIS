@@ -38,7 +38,7 @@ class FakeSession:
         self.headers = {}
         self.calls = []
 
-    def get(self, url, params=None, timeout=None):
+    def get(self, url, params=None, timeout=None, headers=None):
         self.calls.append((url, dict(params or {})))
         return FakeResponse(*self.handler(url, params or {}))
 

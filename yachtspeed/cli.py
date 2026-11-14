@@ -131,18 +131,112 @@ def cmd_forecast(cfg, a):
     _print(r)
 
 
+def _latest(conn, mmsi):
+    return conn.execute(
+        "SELECT provider_time_utc, lat, lon, sog_kn, cog_deg, source FROM ais_reports WHERE mmsi=? "
+        "ORDER BY provider_time_utc DESC LIMIT 1", (mmsi,)).fetchone()
+
+
+def _start_point(conn, a, mmsi):
+    """--from LAT,LON [--course --speed --at], else the yacht's latest stored report."""
+    last = _latest(conn, mmsi)
+    if a.from_:
+        lat, lon = map(float, a.from_.split(","))
+        at = parse_iso(a.at) if a.at else utcnow()
+        course, sog, src = a.course, a.speed, "given"
+    elif last:
+        lat, lon, at = last["lat"], last["lon"], parse_iso(last["provider_time_utc"])
+        course = a.course if a.course is not None else last["cog_deg"]
+        sog = a.speed if a.speed is not None else last["sog_kn"]
+        src = f"latest report {last['provider_time_utc']} ({last['source']})"
+        age_h = (utcnow() - at).total_seconds() / 3600
+        if age_h > 6:
+            print(f"warning: latest report is {age_h:.0f} h old; pass --from LAT,LON for a fresher start",
+                  file=sys.stderr)
+    else:
+        sys.exit("no stored position for this yacht; pass --from LAT,LON (and --course/--speed for wind-ahead)")
+    return lat, lon, at, course, sog, src
+
+
+def _depart(a, at):
+    if a.depart:
+        return parse_iso(a.depart)
+    return max(at, utcnow().replace(second=0, microsecond=0)) if a.from_ is None else at
+
+
 def cmd_passage(cfg, a):
     from .forecast import passage_forecast
+    from .speedtable import DESTINATIONS, destination_route
 
     conn = _conn(cfg)
     mmsi = _mmsi(cfg, a.yacht)
     model, _ = _model(conn, cfg, mmsi)
-    wps = [tuple(map(float, w.split(","))) for w in a.waypoints]
-    r = passage_forecast(conn, cfg, _client(conn, cfg), model, mmsi, wps, parse_iso(a.depart), a.step_nm,
-                         wind_provider=a.wind_provider, store=not a.no_store)
-    if not a.steps:
-        r["steps"] = [{k: s[k] for k in ("idx", "start_utc", "distance_nm", "speed_kn", "flags")} for s in r["steps"]]
-    _print(r)
+    if a.to:
+        if a.to not in DESTINATIONS:
+            sys.exit(f"unknown destination {a.to!r}; known: {', '.join(DESTINATIONS)} (or give waypoints)")
+        lat, lon, at, _, _, src = _start_point(conn, a, mmsi)
+        wps = [(lat, lon)] + destination_route(a.to, lat, lon) + [tuple(map(float, w.split(","))) for w in a.waypoints]
+        depart = _depart(a, at)
+    else:
+        if len(a.waypoints) < 2 or not a.depart:
+            sys.exit("give --to NAME, or --depart plus at least two lat,lon waypoints")
+        wps = [tuple(map(float, w.split(","))) for w in a.waypoints]
+        depart, src = parse_iso(a.depart), "waypoints"
+    table = None if a.speed_table == "none" else a.speed_table
+    try:
+        r = passage_forecast(conn, cfg, _client(conn, cfg), model, mmsi, wps, depart, a.step_nm,
+                             wind_provider=a.wind_provider, store=not a.no_store, speed_table=table,
+                             motor_below_kn=a.motor_below, motor_speed_kn=a.motor_speed)
+    except ValueError as e:
+        sys.exit(f"cannot forecast passage: {e}")
+    r["start"] = src
+    r["route"] = [[round(x, 3), round(y, 3)] for x, y in wps]
+    if a.json:
+        if not a.steps:
+            r["steps"] = [{k: s[k] for k in ("idx", "start_utc", "distance_nm", "speed_kn", "speed_source", "flags")}
+                          for s in r["steps"]]
+        _print(r)
+        return
+    print(f"{a.yacht}: {r['distance_nm']} nm, depart {r['departure_utc']} -> ETA {r['arrival_utc']} "
+          f"({r['duration_hours']} h, avg {r['distance_nm'] / r['duration_hours']:.1f} kn)")
+    print(f"start: {src}; route: " + " -> ".join(f"{x},{y}" for x, y in r["route"]))
+    print(f"hours by speed source: {r['hours_by_speed_source']}"
+          + ("" if a.motor_below else "  (no motoring)"))
+    last = None
+    for s_ in r["steps"]:
+        t = parse_iso(s_["start_utc"])
+        if a.steps or last is None or (t - last).total_seconds() >= 6 * 3600 - 60:
+            tws = f"{s_['tws_kn']:.1f}" if s_["tws_kn"] is not None else "  ? "
+            twa = f"{s_['twa_deg']:.0f}" if s_["twa_deg"] is not None else "?"
+            print(f"  {t:%a %d %H:%MZ}  {s_['lat']:7.3f} {s_['lon']:8.3f}  wind {tws} kn TWA {twa:>3}  "
+                  f"{s_['speed_kn']:4.1f} kn [{s_['speed_source']}] {' '.join(f for f in s_['flags'] if f != 'speed_table')}")
+            last = t
+    print(f"  {parse_iso(r['arrival_utc']):%a %d %H:%MZ}  arrive")
+
+
+def cmd_wind_ahead(cfg, a):
+    from .forecast import wind_ahead
+
+    conn = _conn(cfg)
+    mmsi = _mmsi(cfg, a.yacht)
+    lat, lon, at, course, sog, src = _start_point(conn, a, mmsi)
+    if course is None or sog is None:
+        sys.exit("course/speed unknown; pass --course and --speed")
+    r = wind_ahead(conn, cfg, _client(conn, cfg), lat, lon, course, sog, at, a.threshold, a.hours, 1.0, a.below)
+    r["start"] = src
+    if a.json:
+        _print(r)
+        return
+    cond = "below" if a.below else "at or above"
+    print(f"{a.yacht}: from {lat:.3f},{lon:.3f} at {iso(at)}, {course:.0f} deg at {sog:.1f} kn ({src})")
+    f = r["first"]
+    print(f"first forecast wind {cond} {a.threshold:g} kn: " +
+          (f"{f['time_utc']} at {f['lat']},{f['lon']}: {f['wind_kn']} kn from {f['wind_from_deg']:.0f}"
+           if f else f"not within {a.hours} h"))
+    for row in r["track"][::3]:
+        if row.get("wind_kn") is not None:
+            print(f"  {row['time_utc']}  {row['lat']:7.3f} {row['lon']:8.3f}  {row['wind_kn']:4.1f} kn from "
+                  f"{row['wind_from_deg']:3.0f}" + (f"  waves {row['wave_m']} m" if row.get('wave_m') is not None else ""))
 
 
 def cmd_evaluate(cfg, a):
@@ -318,15 +412,34 @@ def build_parser():
     s.add_argument("--wind-provider", help="override, e.g. om_hist_forecast or om_prev_day2")
     s.add_argument("--no-store", action="store_true")
     s.set_defaults(fn=cmd_forecast)
-    s = sub.add_parser("passage", help="passage duration from ordered waypoints")
+    def start_args(sp):
+        sp.add_argument("--from", dest="from_", metavar="LAT,LON", help="start position (default: latest report)")
+        sp.add_argument("--at", help="time of --from position, ISO UTC (default now)")
+        sp.add_argument("--course", type=float, help="degrees true (default: latest report COG)")
+        sp.add_argument("--speed", type=float, help="knots (default: latest report SOG)")
+        sp.add_argument("--json", action="store_true")
+
+    s = sub.add_parser("passage", help="passage ETA: --to NAME from the latest position, or explicit waypoints")
     s.add_argument("--yacht", required=True)
-    s.add_argument("--depart", required=True, help="ISO UTC departure")
+    s.add_argument("--to", help="named destination, e.g. rubicon, las-palmas")
+    s.add_argument("--depart", help="ISO UTC departure (default: now / time of --from)")
     s.add_argument("--step-nm", type=float, default=10.0)
+    s.add_argument("--speed-table", default="cruiser27", help="fallback polar when history is thin ('none' to disable)")
+    s.add_argument("--motor-below", type=float, help="motor when sailing speed is below this (default: never)")
+    s.add_argument("--motor-speed", type=float, default=7.0)
     s.add_argument("--wind-provider")
-    s.add_argument("--steps", action="store_true", help="show full per-step detail")
+    s.add_argument("--steps", action="store_true", help="show every step")
     s.add_argument("--no-store", action="store_true")
-    s.add_argument("waypoints", nargs="+", help="lat,lon lat,lon ...")
+    s.add_argument("waypoints", nargs="*", help="lat,lon ... (with --to: extra points before the destination)")
+    start_args(s)
     s.set_defaults(fn=cmd_passage)
+    s = sub.add_parser("wind-ahead", help="when will the yacht reach a given wind strength on its current course")
+    s.add_argument("--yacht", required=True)
+    s.add_argument("--threshold", type=float, default=10.0)
+    s.add_argument("--below", action="store_true", help="find when wind drops below the threshold instead")
+    s.add_argument("--hours", type=int, default=72)
+    start_args(s)
+    s.set_defaults(fn=cmd_wind_ahead)
     s = sub.add_parser("evaluate", help="hold-out evaluation vs per-yacht median")
     s.add_argument("--yacht")
     s.add_argument("--method", choices=["chrono", "voyage"], default="chrono")
