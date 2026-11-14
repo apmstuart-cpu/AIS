@@ -1,0 +1,22 @@
+[Unit]
+Description=yachtspeed weather enrichment
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=yachtspeed
+Group=yachtspeed
+Environment=YACHTSPEED_CONFIG=/etc/yachtspeed/config.toml PYTHONUNBUFFERED=1
+ExecStart=/opt/yachtspeed/.venv/bin/yachtspeed enrich
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/yachtspeed
+
+[Install]
+WantedBy=multi-user.target

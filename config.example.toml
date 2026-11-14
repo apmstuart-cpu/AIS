@@ -1,0 +1,45 @@
+# yachtspeed configuration. Installed at /etc/yachtspeed/config.toml.
+# Secrets never go here: the AISStream key lives in /etc/yachtspeed/env (AISSTREAM_API_KEY=...).
+
+db_path = "/var/lib/yachtspeed/yachtspeed.db"
+
+[collector]
+# AISStream format: [[lat_min, lon_min], [lat_max, lon_max]]. Pilot: Mediterranean.
+bounding_boxes = [[[30.0, -7.0], [46.0, 37.0]]]
+# Atlantic assessment (add as a second box when ready):
+# bounding_boxes = [[[30.0, -7.0], [46.0, 37.0]], [[10.0, -65.0], [50.0, -7.0]]]
+bucket_minutes = 10
+raw_samples_per_type_per_day = 20
+
+[weather]
+cell_deg = 0.1            # cache grid; Open-Meteo snaps to its own model grid anyway
+settle_minutes = 90       # enrich reports once they are this old
+recent_days = 2           # newer: forecast API; older: historical-forecast API
+calls_per_minute = 300    # stay well under Open-Meteo free limits (600/min, 5000/h, 10000/day)
+calls_per_hour = 3000
+calls_per_day = 8000
+enrich_interval_s = 120
+
+[model]
+min_sog_kn = 2.0
+max_sog_kn = 30.0
+exclude_nav_status = [1, 5, 6]   # at anchor, moored, aground
+min_matches = 8
+tws_tol_kn = 2.5
+tws_tol_frac = 0.2
+twa_tol_deg = 20.0
+wave_tol_m = 0.5
+voyage_gap_hours = 6.0
+
+[backup]
+backup_dir = "/var/lib/yachtspeed/backups"
+backup_keep = 14
+
+# Pilot fleet. Collection only starts for yachts with an MMSI.
+# Verify with: sudo yachtspeed discover ALIBI --minutes 60   (expect length ~27 m)
+[[yacht]]
+name = "ALIBI"
+model = "Oyster 885S"
+mmsi = ""
+verified = false
+notes = "MMSI not yet verified. Public AIS listings named ALIBI found so far do not match a 27 m yacht."

@@ -1,0 +1,12 @@
+[Unit]
+Description=yachtspeed SQLite backup
+
+[Service]
+Type=oneshot
+User=yachtspeed
+Group=yachtspeed
+Environment=YACHTSPEED_CONFIG=/etc/yachtspeed/config.toml
+ExecStart=/opt/yachtspeed/.venv/bin/yachtspeed backup
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/yachtspeed

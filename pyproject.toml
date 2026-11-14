@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "yachtspeed"
+version = "0.2.0"
+description = "Yacht AIS tracking, weather enrichment and speed forecasting"
+requires-python = ">=3.10"
+dependencies = ["websockets>=12", "requests>=2.28", "tomli>=2; python_version<'3.11'"]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[project.scripts]
+yachtspeed = "yachtspeed.cli:main"
+
+[tool.setuptools]
+packages = ["yachtspeed"]
