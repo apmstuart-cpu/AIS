@@ -149,3 +149,15 @@ def test_collector_reconnects_after_server_drop(conn, cfg, monkeypatch):
     assert conn.execute("SELECT COUNT(*) FROM ais_reports").fetchone()[0] == 2
     events = [r[0] for r in conn.execute("SELECT event FROM service_events WHERE service='collector'")]
     assert events.count("connected") == 2 and "disconnect" in events
+
+
+def test_status_flags_identity_mismatch(conn, cfg):
+    from yachtspeed.ais import Static
+    from yachtspeed.geo import utcnow as now
+
+    cfg.fleet[0].callsign, cfg.fleet[0].length_m = "2GQX5", 27.0
+    Store(conn, cfg).store_static(Static("235000001", "ShipStaticData", now(), name="TESTBOAT",
+                                         callsign="MXYZ1", length_m=12.0))
+    y = status(conn, cfg)["yachts"][0]
+    assert len(y["identity_mismatch"]) == 2
+    assert "IDENTITY MISMATCH" in format_text(status(conn, cfg))

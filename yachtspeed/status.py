@@ -29,8 +29,15 @@ def status(conn, cfg) -> dict:
                          (y.mmsi,)).fetchone()
         n24 = conn.execute("SELECT COUNT(*) FROM ais_reports WHERE mmsi=? AND provider_time_utc>=?",
                            (y.mmsi, d1)).fetchone()[0]
+        mismatch = []
+        if v and v["static_callsign"] and y.callsign and v["static_callsign"].upper() != y.callsign.upper():
+            mismatch.append(f"callsign broadcast {v['static_callsign']} != config {y.callsign}")
+        if v and v["static_length_m"] and y.length_m and abs(v["static_length_m"] - y.length_m) > 3:
+            mismatch.append(f"length broadcast {v['static_length_m']} m != config {y.length_m} m")
+        if v and v["static_name"] and v["static_name"].upper() != y.name.upper():
+            mismatch.append(f"name broadcast {v['static_name']!r} != config {y.name!r}")
         yachts.append({
-            "name": y.name, "mmsi": y.mmsi, "verified": y.verified,
+            "name": y.name, "mmsi": y.mmsi, "verified": y.verified, "identity_mismatch": mismatch,
             "broadcast_name": v["static_name"] if v else None,
             "broadcast_callsign": v["static_callsign"] if v else None,
             "last_report": dict(last) if last else None,
@@ -91,6 +98,8 @@ def format_text(s: dict) -> str:
                          f"SOG {lr['sog_kn']} kn; {y['reports_24h']} reports/24h")
         else:
             lines.append(f"  {y['name']} {y['mmsi']}{flag}: no reports yet")
+        for m in y.get("identity_mismatch") or []:
+            lines.append(f"      IDENTITY MISMATCH: {m}")
         if y.get("broadcast_name"):
             lines.append(f"      broadcast name {y['broadcast_name']!r} callsign {y['broadcast_callsign']!r}")
     for name, h in s["services"].items():

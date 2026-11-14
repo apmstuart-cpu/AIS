@@ -18,9 +18,7 @@ It runs as two supervised services on an always-on Linux host:
 git clone <this repo> yacht-speed && cd yacht-speed
 sudo ./deploy/install.sh
 sudoedit /etc/yachtspeed/env          # AISSTREAM_API_KEY=...   (root-only, 0600)
-sudo yachtspeed discover ALIBI --minutes 60   # find/verify the MMSI (expect ~27 m length)
-sudoedit /etc/yachtspeed/config.toml  # set mmsi = "...", verified = true
-sudo systemctl restart yachtspeed-collector
+sudo systemctl restart yachtspeed-collector  # ALIBI OF LONDON (235099768) is preconfigured
 yachtspeed status
 ```
 

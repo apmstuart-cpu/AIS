@@ -21,6 +21,8 @@ class Yacht:
     model: str = ""
     verified: bool = False
     notes: str = ""
+    callsign: str = ""
+    length_m: float | None = None
 
 
 @dataclass

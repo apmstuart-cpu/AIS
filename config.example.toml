@@ -5,9 +5,10 @@ db_path = "/var/lib/yachtspeed/yachtspeed.db"
 
 [collector]
 # AISStream format: [[lat_min, lon_min], [lat_max, lon_max]]. Pilot: Mediterranean.
-bounding_boxes = [[[30.0, -7.0], [46.0, 37.0]]]
-# Atlantic assessment (add as a second box when ready):
-# bounding_boxes = [[[30.0, -7.0], [46.0, 37.0]], [[10.0, -65.0], [50.0, -7.0]]]
+# Box 1: Mediterranean (pilot). Box 2: eastern/central Atlantic incl. West Africa, Canaries,
+# Cape Verde and the trade-wind route to the Caribbean (ALIBI OF LONDON was off West Africa
+# in Nov 2026). Atlantic coverage is assessed separately: expect sparse offshore reports.
+bounding_boxes = [[[30.0, -7.0], [46.0, 37.0]], [[0.0, -70.0], [50.0, -7.0]]]
 bucket_minutes = 10
 raw_samples_per_type_per_day = 20
 
@@ -36,11 +37,13 @@ backup_dir = "/var/lib/yachtspeed/backups"
 backup_keep = 14
 
 # Pilot fleet. Collection only starts for yachts with an MMSI.
-# Verify with: sudo yachtspeed discover ALIBI --minutes 60
-#   expect broadcast name "ALIBI OF LONDON", length ~27 m (A+B), UK call sign
+# callsign and length_m are checked against the yacht's own AIS static broadcasts
+# (yachtspeed status flags any mismatch).
 [[yacht]]
 name = "ALIBI OF LONDON"
 model = "Oyster 885S (2013, 27.08 m, UK)"
-mmsi = ""
-verified = false
-notes = "MMSI not yet verified. Public listings for plain ALIBI (232059724, 235088205, 228481000) are ~12 m boats, not this yacht."
+mmsi = "235099768"
+callsign = "2GQX5"
+length_m = 27.0
+verified = true
+notes = "MMSI from MarineTraffic listing (name, UK flag, 27 x 6 m, call sign 2GQX5) supplied by owner 2026-11-14; confirm against her own static broadcast. Not 232059724/235088205/228481000 (other ALIBIs, ~12 m)."
