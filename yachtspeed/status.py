@@ -103,6 +103,19 @@ def format_text(s: dict) -> str:
         if y.get("broadcast_name"):
             lines.append(f"      broadcast name {y['broadcast_name']!r} callsign {y['broadcast_callsign']!r}")
     for name, h in s["services"].items():
+        if name == "yb":
+            lines.append(f"  rally tracker import: last run {h['age_min']} min ago")
+            for yacht, r in (h.get("detail") or {}).items():
+                if not isinstance(r, dict):
+                    continue
+                if "stored" in r:
+                    lines.append(f"      {yacht}: {r['race']} team {r['team']!r}, {r['points']} fixes on tracker, "
+                                 f"{r['stored']} new")
+                elif r.get("status") == "team_not_listed_yet":
+                    lines.append(f"      {yacht}: not on {r['race']} tracker yet (normal before the fleet is loaded)")
+                else:
+                    lines.append(f"      {yacht}: {r.get('status')} {r.get('error', '')}")
+            continue
         lines.append(f"  service {name}: heartbeat {h['age_min']} min ago")
     c, w = s["collector"], s["weather"]
     lines.append(f"  collector 24h: {c['connects_24h']} connects, {c['disconnects_24h']} disconnects, "

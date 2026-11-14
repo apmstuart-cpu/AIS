@@ -79,3 +79,14 @@ def test_dense_fixes_measured_against_fix_10_min_back():
     out = with_derived_motion(pts)
     assert all(p["sog_kn"] is None for p in out[:5])  # nothing 10 min back yet
     assert all(p["sog_kn"] is not None and 3.4 < p["sog_kn"] < 3.8 for p in out[5:])  # 0.12 nm per 2 min = 3.6 kn
+
+
+def test_status_shows_tracker_result(conn, cfg):
+    from yachtspeed import db
+    from yachtspeed.status import format_text, status
+
+    db.heartbeat(conn, "yb", {"SORCERESS": {"race": "arc2026", "status": "team_not_listed_yet", "teams_listed": 2}})
+    assert "not on arc2026 tracker yet" in format_text(status(conn, cfg))
+    db.heartbeat(conn, "yb", {"SORCERESS": {"race": "arc2026", "team": "Sorceress", "team_id": 4,
+                                            "points": 30, "stored": 3, "duplicate_bucket": 27, "no_motion": 0}})
+    assert "team 'Sorceress', 30 fixes on tracker, 3 new" in format_text(status(conn, cfg))
