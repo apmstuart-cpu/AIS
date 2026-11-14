@@ -223,6 +223,8 @@ def cmd_passage(cfg, a):
     if a.motor_speed is None:
         a.motor_speed = 7.0
     table = None if a.speed_table == "none" else a.speed_table
+    if a.models:
+        return _passage_models(conn, cfg, a, model, mmsi, wps, depart, table)
     try:
         r = passage_forecast(conn, cfg, _client(conn, cfg), model, mmsi, wps, depart, a.step_nm,
                              wind_provider=a.wind_provider, store=not a.no_store, speed_table=table,
@@ -259,6 +261,55 @@ def cmd_passage(cfg, a):
     print(f"  {parse_iso(r['arrival_utc']):%a %d %H:%MZ}  arrive")
 
 
+def _passage_models(conn, cfg, a, model, mmsi, wps, depart, table):
+    """Run the same passage on several forecast models and show the spread of ETAs."""
+    from .forecast import passage_forecast
+    from .weather import model_provider
+
+    names = [m.strip() for m in a.models.split(",") if m.strip()]
+    client = _client(conn, cfg)
+    rows = []
+    for name in names:
+        try:
+            r = passage_forecast(conn, cfg, client, model, mmsi, wps, depart, a.step_nm,
+                                 wind_provider=model_provider(name), store=False, speed_table=table,
+                                 motor_below_kn=a.motor_below, motor_speed_kn=a.motor_speed,
+                                 polar_factor=a.polar_factor, use_current=not a.no_current)
+        except ValueError as e:
+            rows.append({"model": name, "error": str(e)})
+            continue
+        winds = [s_["tws_kn"] for s_ in r["steps"] if s_["tws_kn"] is not None]
+        rows.append({"model": name, "eta_utc": r["arrival_utc"], "hours": r["duration_hours"],
+                     "avg_kn": round(r["distance_nm"] / r["duration_hours"], 1),
+                     "wind_min_kn": round(min(winds), 1) if winds else None,
+                     "wind_max_kn": round(max(winds), 1) if winds else None,
+                     "becalmed_steps": sum("becalmed" in s_["flags"] for s_ in r["steps"]),
+                     "distance_nm": r["distance_nm"]})
+    ok = [x for x in rows if "eta_utc" in x]
+    spread = None
+    if ok:
+        etas = sorted(parse_iso(x["eta_utc"]) for x in ok)
+        spread = {"earliest_utc": iso(etas[0]), "latest_utc": iso(etas[-1]),
+                  "median_utc": iso(etas[len(etas) // 2]),
+                  "spread_hours": round((etas[-1] - etas[0]).total_seconds() / 3600, 1)}
+    if a.json:
+        _print({"departure_utc": iso(depart), "route": [[round(x, 3), round(y, 3)] for x, y in wps],
+                "models": rows, "spread": spread})
+        return
+    print(f"{a.yacht}: depart {iso(depart)}, {ok[0]['distance_nm'] if ok else '?'} nm; "
+          f"speed table {table} x{a.polar_factor:g}" + ("" if a.motor_below else ", no motoring"))
+    print(f"  {'model':8s} {'ETA (UTC)':17s} {'hours':>6s} {'avg kn':>6s} {'wind kn':>10s} becalmed")
+    for x in rows:
+        if "error" in x:
+            print(f"  {x['model']:8s} unavailable: {x['error'][:70]}")
+        else:
+            print(f"  {x['model']:8s} {parse_iso(x['eta_utc']):%a %d %H:%MZ}   {x['hours']:6.1f} {x['avg_kn']:6.1f} "
+                  f"{x['wind_min_kn']:4.1f}-{x['wind_max_kn']:<5.1f} {x['becalmed_steps']}")
+    if spread:
+        print(f"  spread: {parse_iso(spread['earliest_utc']):%a %d %H:%MZ} to {parse_iso(spread['latest_utc']):%a %d %H:%MZ}"
+              f" ({spread['spread_hours']} h); median {parse_iso(spread['median_utc']):%a %d %H:%MZ}")
+
+
 def cmd_wind_ahead(cfg, a):
     from .forecast import wind_ahead
 
@@ -267,6 +318,20 @@ def cmd_wind_ahead(cfg, a):
     lat, lon, at, course, sog, src = _start_point(conn, a, mmsi)
     if course is None or sog is None:
         sys.exit("course/speed unknown; pass --course and --speed")
+    if a.models:
+        from .forecast import wind_ahead as _wa
+        from .weather import model_provider
+
+        cond = "below" if a.below else "at or above"
+        print(f"{a.yacht}: from {lat:.3f},{lon:.3f} at {iso(at)}, {course:.0f} deg at {sog:.1f} kn; "
+              f"first wind {cond} {a.threshold:g} kn:")
+        for name in [m.strip() for m in a.models.split(",") if m.strip()]:
+            r = _wa(conn, cfg, _client(conn, cfg), lat, lon, course, sog, at, a.threshold, a.hours, 1.0, a.below,
+                    wind_provider=model_provider(name))
+            f = r["first"]
+            print(f"  {name:8s} " + (f"{f['time_utc']} at {f['lat']},{f['lon']}: {f['wind_kn']} kn from "
+                                      f"{f['wind_from_deg']:.0f}" if f else f"not within {a.hours} h"))
+        return
     r = wind_ahead(conn, cfg, _client(conn, cfg), lat, lon, course, sog, at, a.threshold, a.hours, 1.0, a.below)
     r["start"] = src
     if a.json:
@@ -487,6 +552,7 @@ def build_parser():
     s.add_argument("--motor-speed", type=float, help="motoring speed (default: config, else 7)")
     s.add_argument("--no-motor", action="store_true", help="ignore the yacht's configured motoring")
     s.add_argument("--wind-provider")
+    s.add_argument("--models", help="compare forecast models, e.g. ecmwf,aifs,gfs,icon (shows the ETA spread)")
     s.add_argument("--steps", action="store_true", help="show every step")
     s.add_argument("--no-store", action="store_true")
     s.add_argument("waypoints", nargs="*", help="lat,lon ... (with --to: extra points before the destination)")
@@ -497,6 +563,7 @@ def build_parser():
     s.add_argument("--threshold", type=float, default=10.0)
     s.add_argument("--below", action="store_true", help="find when wind drops below the threshold instead")
     s.add_argument("--hours", type=int, default=72)
+    s.add_argument("--models", help="compare forecast models, e.g. ecmwf,aifs,gfs,icon")
     start_args(s)
     s.set_defaults(fn=cmd_wind_ahead)
     s = sub.add_parser("evaluate", help="hold-out evaluation vs per-yacht median")

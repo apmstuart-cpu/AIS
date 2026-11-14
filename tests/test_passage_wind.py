@@ -1,3 +1,4 @@
+import json
 import math
 from datetime import timedelta
 
@@ -200,3 +201,43 @@ def test_recent_past_fix_uses_metno_held_back_when_open_meteo_unavailable(conn, 
     assert prov == "metno" and wx["wind_speed_kn"] == pytest.approx(10.0, abs=0.01)
     with pytest.raises(FetchError):  # more than 12 h back: no fallback
         point_weather(conn, c, cfg, 33.6, -8.4, utcnow() - timedelta(hours=14))
+
+
+def test_model_provider_requests_named_model(conn, cfg):
+    from yachtspeed.weather import model_provider, point_weather
+
+    def handler(url, p):
+        if "marine" in url:
+            return 200, om_body(p)
+        speed = {"ecmwf_ifs025": 8.0, "gfs_seamless": 14.0}[p["models"]]
+        return 200, om_body(p, {"wind_speed_10m": [speed] * 24})
+
+    c = client(conn, handler)
+    when = (utcnow() + timedelta(days=1)).replace(hour=6, minute=0, second=0, microsecond=0)
+    e, pe, _ = point_weather(conn, c, cfg, 33.3, -8.9, when, model_provider("ecmwf"))
+    g, pg, _ = point_weather(conn, c, cfg, 33.3, -8.9, when, model_provider("gfs"))
+    assert (e["wind_speed_kn"], g["wind_speed_kn"]) == (8.0, 14.0)
+    assert pe == "om_model:ecmwf_ifs025" and pg == "om_model:gfs_seamless"
+
+
+def test_passage_models_cli_shows_spread(conn, cfg, tmp_path, monkeypatch, capsys):
+    from yachtspeed import cli, weather
+
+    def handler(url, p):
+        if "marine" in url:
+            return 200, om_body(p)
+        speed = {"ecmwf_ifs025": 8.0, "gfs_seamless": 16.0}.get(p.get("models"), 12.0)
+        return 200, om_body(p, {"wind_speed_10m": [speed] * 24})
+
+    real_init = weather.OpenMeteo.__init__
+    monkeypatch.setattr(weather.OpenMeteo, "__init__",
+                        lambda self, budget, session=None, timeout=30: real_init(self, budget, FakeSession(handler)))
+    cfgfile = tmp_path / "c.toml"
+    cfgfile.write_text(f'db_path = "{cfg.db_path}"\n[[yacht]]\nname = "TESTBOAT"\nmmsi = "235000001"\n')
+    dep = (utcnow() + timedelta(hours=2)).strftime("%Y-%m-%dT%H:00Z")
+    cli.main(["--config", str(cfgfile), "--plain-logs", "passage", "--yacht", "TESTBOAT", "--from", "33.6,-8.4",
+              "--at", dep, "--to", "rubicon", "--speed-table", "oyster885_std", "--models", "ecmwf,gfs", "--json"])
+    out = json.loads(capsys.readouterr().out)
+    by = {m["model"]: m for m in out["models"]}
+    assert by["gfs"]["hours"] < by["ecmwf"]["hours"]  # more wind, faster
+    assert out["spread"]["spread_hours"] > 0

@@ -41,6 +41,7 @@ yachtspeed passage --yacht "ALIBI OF LONDON" --to rubicon            ETA from la
 yachtspeed passage --yacht X --to rubicon --from 33.62,-8.38 --at 2026-11-14T18:03Z   from a position you supply
 yachtspeed passage --yacht X --depart 2026-11-18T08:00Z 39.55,2.63 39.0,3.5   explicit waypoints
       (--motor-below 6 --motor-speed 7 to allow motoring; --speed-table none to disable the fallback polar)
+yachtspeed passage --yacht X --to rubicon --models ecmwf,aifs,gfs,icon   same passage on 4 forecast models: ETA spread
 yachtspeed wind-ahead --yacht "ALIBI OF LONDON" --threshold 10    when will she reach 10 kn on current course/speed
 yachtspeed wind-ahead --yacht X --from 33.62,-8.38 --course 238 --speed 4.5 [--below]
 yachtspeed evaluate [--method chrono|voyage]     hold-out MAE vs per-yacht median

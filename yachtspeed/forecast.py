@@ -174,7 +174,7 @@ def backtest_voyages(conn, cfg, client, obs, min_hours=6.0, step_nm=10.0, max_vo
 
 
 def wind_ahead(conn, cfg, client, lat, lon, course, sog, start: datetime, threshold=10.0, hours=72,
-               step_h=1.0, below=False) -> dict:
+               step_h=1.0, below=False, wind_provider=None) -> dict:
     """Dead-reckon from a position at constant course/speed and report the forecast wind
     along the way, and the first time it reaches `threshold` (or drops below it if `below`)."""
     from .geo import EARTH_RADIUS_NM
@@ -193,7 +193,7 @@ def wind_ahead(conn, cfg, client, lat, lon, course, sog, start: datetime, thresh
         t = start + timedelta(hours=i * step_h)
         la, lo = dest(lat, lon, course, sog * i * step_h)
         try:
-            wx, prov, _ = point_weather(conn, client, cfg, la, lo, t)
+            wx, prov, _ = point_weather(conn, client, cfg, la, lo, t, wind_provider)
         except FetchError:
             track.append({"time_utc": iso(t), "lat": round(la, 3), "lon": round(lo, 3), "status": "no_forecast"})
             continue

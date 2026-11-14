@@ -32,6 +32,18 @@ ENDPOINTS = {
     "om_marine": "https://marine-api.open-meteo.com/v1/marine",
 }
 WIND_VARS = ["wind_speed_10m", "wind_direction_10m", "wind_gusts_10m"]
+
+# Forecast models for multi-model comparisons (Open-Meteo model ids). Provider string: "om_model:<id>".
+MODELS = {
+    "ecmwf": "ecmwf_ifs025",          # ECMWF IFS 0.25 deg
+    "aifs": "ecmwf_aifs025_single",   # ECMWF AIFS (machine-learning model)
+    "gfs": "gfs_seamless",            # NOAA GFS
+    "icon": "icon_seamless",          # DWD ICON
+}
+
+
+def model_provider(name: str) -> str:
+    return f"om_model:{MODELS.get(name, name)}"
 MARINE_VARS = ["wave_height", "wave_direction", "wave_period", "ocean_current_velocity",
                "ocean_current_direction"]
 
@@ -157,6 +169,9 @@ class OpenMeteo:
                 n = int(provider.removeprefix("om_prev_day"))
                 names = [f"{v}_previous_day{n}" for v in WIND_VARS]
                 key = "om_prev"
+            elif provider.startswith("om_model:"):  # one named model from the forecast API
+                names, key = WIND_VARS, "om_forecast"
+                params["models"] = provider.split(":", 1)[1]
             else:
                 names, key = WIND_VARS, provider
             params["hourly"] = ",".join(names)
