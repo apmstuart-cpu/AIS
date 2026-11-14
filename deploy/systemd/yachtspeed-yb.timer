@@ -1,0 +1,11 @@
+[Unit]
+Description=Import YB Tracking positions every 3 hours
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=3h
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

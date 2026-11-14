@@ -30,7 +30,7 @@ mkdir -p /var/log/journal && systemd-tmpfiles --create --prefix /var/log/journal
 systemctl restart systemd-journald
 
 systemctl daemon-reload
-systemctl enable --now yachtspeed-backup.timer
+systemctl enable --now yachtspeed-backup.timer yachtspeed-yb.timer
 systemctl enable yachtspeed-collector yachtspeed-enricher
 systemctl restart yachtspeed-enricher
 if grep -q '^AISSTREAM_API_KEY=.\+' /etc/yachtspeed/env && grep -q '^mmsi = "[0-9]\{9\}"' /etc/yachtspeed/config.toml; then

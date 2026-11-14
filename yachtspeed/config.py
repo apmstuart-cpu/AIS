@@ -23,6 +23,8 @@ class Yacht:
     notes: str = ""
     callsign: str = ""
     length_m: float | None = None
+    yb_race: str = ""  # YB Tracking race code, e.g. "arc2026"
+    yb_team: str = ""  # team name on the tracker if it differs from `name`
 
 
 @dataclass

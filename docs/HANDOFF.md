@@ -81,6 +81,15 @@ sudo systemctl restart yachtspeed-collector        # after config changes
 * **No reports from the two pilot yachts yet** (as of 2026-11-14 16:50 UTC).
 * **ALIBI OF LONDON: MMSI 235099768, call sign 2GQX5**, taken from a MarineTraffic listing (UK flag, 27 × 6 m, pleasure craft / sailing). The 235 prefix is a UK MMSI, which fits. Still to do: confirm against her own static broadcast; `yachtspeed status` flags any name, call sign or length mismatch. The other "ALIBI" MMSIs (232059724, 235088205, 228481000) are different 12–13 m boats.
 * **SORCERESS: MMSI 538071210, call sign V7JW6**, taken from a MarineTraffic listing (Marshall Islands flag, which fits the 538 prefix; 32 × 7 m, sailing). She was near Gibraltar on 2026-11-20, inside the coverage area. Confirm against her own static broadcast.
+* **SORCERESS is entered in the ARC 2026** (Gran Canaria → St Lucia, starts 22 Nov 2026). She is
+  set to `yb_race = "arc2026"`. The YB tracker for the race exists but had no boats loaded on
+  2026-11-14; until boats appear, `import-yb` reports `team_not_listed_yet`. The importer was
+  tested on the real ARC 2025 data: 144 boats and about 61,000 fixes decoded, and one boat
+  imported 162 fixes Las Palmas → Rodney Bay with derived speeds of 10.2 kn median and
+  12.2 kn max. Before relying on derived speeds, check that the tracker's boat name matches:
+  `yachtspeed import-yb --list arc2026 --search sorc`.
+* YB data comes from the public yb.tl viewer's endpoints. It is polled every 3 h, lightly,
+  and used for personal research. These endpoints are undocumented and could change.
 * **ALIBI OF LONDON was off West Africa in November 2026**, outside the Mediterranean pilot box. A second, Atlantic box (0–50°N, 70°W–7°W) is now configured. Terrestrial AIS coverage off West Africa and mid-Atlantic is thin, so expect long gaps. This is exactly the case where satellite AIS or onboard telemetry is needed.
 * **Offshore coverage**: AISStream is terrestrial-receiver based. Expect reports near the coast
   and gaps mid-passage, such as the Balearics–Sardinia crossing or Atlantic crossings. Measure

@@ -210,6 +210,32 @@ def cmd_backtest_passages(cfg, a):
     _print(backtest_voyages(conn, cfg, _client(conn, cfg), obs, a.min_hours, a.step_nm, a.max_voyages))
 
 
+def cmd_import_yb(cfg, a):
+    from .collector import Store
+    from .yb import YBClient, find_team, import_team, sync_configured
+
+    conn = _conn(cfg)
+    client = YBClient()
+    if a.list:
+        teams = client.teams(a.list)
+        q = (a.search or "").upper()
+        _print(sorted(t["name"] for t in teams if q in t["name"].upper()))
+        return
+    if a.race:
+        if not a.yacht:
+            sys.exit("--race needs --yacht (a configured yacht name or MMSI)")
+        mmsi = _mmsi(cfg, a.yacht)
+        team = find_team(client.teams(a.race), a.team or a.yacht)
+        if not team:
+            sys.exit(f"no unique team matching {a.team or a.yacht!r} in {a.race}; use --list {a.race}")
+        pts = client.positions(a.race).get(team["id"], [])
+        _print({"team": team["name"], **import_team(Store(conn, cfg), a.race, team["id"], mmsi, pts)})
+        return
+    res = sync_configured(conn, cfg, client)
+    db.heartbeat(conn, "yb", res)
+    _print(res or "no yachts have yb_race set in config")
+
+
 def cmd_backup(cfg, a):
     from .backup import backup
 
@@ -322,6 +348,13 @@ def build_parser():
     s.add_argument("--step-nm", type=float, default=10)
     s.add_argument("--max-voyages", type=int, default=20)
     s.set_defaults(fn=cmd_backtest_passages)
+    s = sub.add_parser("import-yb", help="import YB Tracking (rally satellite tracker) positions")
+    s.add_argument("--list", metavar="RACE", help="list team names on a race, e.g. arc2026")
+    s.add_argument("--search", help="with --list: filter names")
+    s.add_argument("--race", help="one-off import from this race (default: all yachts with yb_race)")
+    s.add_argument("--yacht", help="with --race: configured yacht to attach positions to")
+    s.add_argument("--team", help="with --race: team name on the tracker if different")
+    s.set_defaults(fn=cmd_import_yb)
     s = sub.add_parser("backup")
     s.add_argument("--dest")
     s.add_argument("--keep", type=int)

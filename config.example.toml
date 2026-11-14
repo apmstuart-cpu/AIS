@@ -55,4 +55,5 @@ mmsi = "538071210"
 callsign = "V7JW6"
 length_m = 32.0
 verified = true
+yb_race = "arc2026"   # ARC 2026 satellite tracker (yb.tl); imported every 3 h by yachtspeed-yb.timer
 notes = "MMSI from MarineTraffic listing (Marshall Islands flag, 32 x 7 m, sailing, call sign V7JW6) supplied by owner 2026-11-20, then near Gibraltar; confirm against her own static broadcast."

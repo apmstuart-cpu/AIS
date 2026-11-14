@@ -10,6 +10,7 @@ It runs as two supervised services on an always-on Linux host:
 |---|---|
 | `yachtspeed-collector` | AISStream websocket → SQLite. Class A (msg 1-3) and Class B (18, 19) positions, plus static data (5, 24) used to verify MMSIs. Keeps the first valid report per vessel, source and 10-minute UTC bucket. Reconnects with back-off. |
 | `yachtspeed-enricher` | Every 2 min, matches reports at least 90 min old to the nearest UTC hour of weather. Fetches one day per grid cell and caches it. Stays inside a call budget, backs off on failures and processes newest data first. |
+| `yachtspeed-yb.timer` | Every 3 h, imports rally satellite-tracker positions (YB Tracking, e.g. the ARC) for yachts with `yb_race` set. These cover the ocean legs that AIS cannot. |
 | `yachtspeed-backup.timer` | Daily online SQLite backup (gzip, integrity-checked, keeps 14). |
 
 ## Install on the server
@@ -31,6 +32,7 @@ yachtspeed status [--json]           last report per yacht, reconnects, backlog,
 yachtspeed samples --limit 5         raw AISStream payloads next to parsed values (parser check)
 yachtspeed discover NAME             list MMSIs broadcasting NAME in the bounding box
 yachtspeed export out.csv [--which enriched|unmatched|all] [--yacht "ALIBI OF LONDON"] [--since ...]
+yachtspeed import-yb [--list arc2026 --search sorc]   rally tracker positions (source yb:<race>)
 yachtspeed import-csv hist.csv       historical AIS: mmsi,timestamp_utc,lat,lon,sog_kn,cog_deg,heading_deg,nav_status
 yachtspeed enrich --backfill-since 2024-01-01   enrich imported history, then exit
 yachtspeed enrich --once --retry-failed         reset failed weather fetches and retry
@@ -58,6 +60,14 @@ Logs: `journalctl -u yachtspeed-collector -f` (JSON lines; persistent across reb
   `pending` (not yet attempted). Every row records `wind_provider` / `marine_provider`.
 * Weather providers: `om_forecast` (last 2 days and future), `om_hist_forecast` (archived
   forecasts, 2022+), `om_prev_dayN` (wind as forecast N days before), `om_marine`.
+
+## Rally trackers (YB)
+
+Set `yb_race = "arc2026"` (and `yb_team` if the tracker name differs) on a yacht. The timer
+then imports its track every 3 hours, and re-runs are de-duplicated. YB provides position
+and time only. SOG and COG are **made good** from the fix at least 10 minutes earlier
+(typically 1–6 h offshore), so they read low when the yacht tacks or gybes between fixes.
+Rows carry `source = yb:<race>` and are weather-matched like AIS rows.
 
 ## Model
 
