@@ -1,19 +1,48 @@
-"""Generic boat-speed tables used when a yacht has too little history for the SOG model.
+"""Boat-speed tables (polars) used when a yacht has too little history for the SOG model.
 
-These are rough ASSUMPTIONS for planning, not measured polars. Every step that uses
-one is flagged 'speed_table' in passage output. Upwind of 45 degrees TWA the yacht is
-assumed to tack, and progress along the course is reduced accordingly.
+Each table gives boat speed through the water (kn) by true wind speed (TWS) and true
+wind angle (TWA), plus optimum beat and run angles. Progress along a course that is
+tighter than the beat angle or deeper than the gybe angle assumes the yacht tacks or
+gybes at the optimum angle: progress = V(optimum) * cos(angle off course).
+
+Every passage step that uses a table is flagged 'speed_table' in the output.
+`factor` scales a table (e.g. 0.85 for a cruising yacht against a racing VPP).
 """
 
 from __future__ import annotations
 
 import math
 
-TWS = [4, 6, 8, 10, 12, 14, 16, 20, 25, 30]
+# Oyster 885 GT "BABIANA": VPP from her ORC Club certificate (GBR, RefNo 038600051DB,
+# CertNo 100701, issued 2026-10-07), public ORC data feed. ORC allowances (s/nm) converted
+# to knots. This is a RACING prediction: race crew, clean hull, 624 m2 asymmetric spinnaker.
+# A cruising 885 (e.g. a 2013 Series I with cruising sails, loaded, short-handed) will be
+# slower; use a factor (0.8-0.9 is typical) until real data calibrates it.
+_ORC_885GT = {
+    "tws": [4, 6, 8, 10, 12, 14, 16, 20, 24],
+    "speeds": {
+        52: [5.10, 7.28, 8.64, 9.57, 10.10, 10.41, 10.61, 10.88, 11.00],
+        60: [5.73, 7.94, 9.27, 10.04, 10.55, 10.83, 11.01, 11.24, 11.36],
+        75: [6.44, 8.61, 9.94, 10.63, 10.98, 11.26, 11.45, 11.70, 11.86],
+        90: [6.56, 8.69, 10.08, 10.88, 11.32, 11.58, 11.76, 12.08, 12.35],
+        110: [5.94, 8.09, 9.59, 10.64, 11.28, 11.69, 12.02, 12.60, 13.03],
+        120: [5.31, 7.50, 9.28, 10.58, 11.33, 11.80, 12.12, 12.80, 13.45],
+        135: [4.60, 6.77, 8.58, 9.97, 10.95, 11.58, 12.08, 13.06, 14.05],
+        150: [3.79, 5.62, 7.22, 8.60, 9.77, 10.72, 11.38, 12.32, 13.26],
+        165: [2.61, 3.96, 5.29, 6.54, 7.72, 8.76, 9.68, 11.05, 11.90],
+        180: [2.25, 3.40, 4.55, 5.68, 6.75, 7.74, 8.66, 10.24, 11.32],
+    },
+    "beat_vmg": [3.16, 4.60, 5.69, 6.39, 6.81, 7.09, 7.29, 7.57, 7.67],
+    "beat_angle": [49.8, 44.9, 42.6, 41.4, 40.7, 40.1, 39.7, 39.1, 39.2],
+    "run_vmg": [3.28, 4.87, 6.25, 7.45, 8.46, 9.30, 9.93, 10.83, 11.62],
+    "gybe_angle": [138.1, 140.3, 141.2, 145.6, 148.9, 151.7, 153.4, 159.2, 160.4],
+    "source": "ORC certificate, Oyster 885 GT BABIANA (GBR), 2026-10-07",
+}
 
-TABLES = {
-    # ~27 m performance cruiser (e.g. Oyster 885 class), boat speed in knots
-    "cruiser27": {
+# Rough generic ~27 m cruiser (no spinnaker). An ASSUMPTION, not a measured polar.
+_CRUISER27 = {
+    "tws": [4, 6, 8, 10, 12, 14, 16, 20, 25, 30],
+    "speeds": {
         45: [2.8, 4.2, 5.3, 6.2, 6.9, 7.4, 7.7, 8.0, 8.0, 7.8],
         60: [3.4, 4.8, 6.0, 7.0, 7.8, 8.4, 8.8, 9.3, 9.5, 9.4],
         90: [3.6, 5.0, 6.3, 7.4, 8.3, 9.0, 9.6, 10.4, 11.0, 11.2],
@@ -21,7 +50,12 @@ TABLES = {
         150: [2.4, 3.6, 4.9, 6.1, 7.2, 8.1, 8.9, 10.0, 10.8, 11.2],
         180: [1.9, 3.0, 4.2, 5.4, 6.5, 7.4, 8.3, 9.6, 10.5, 11.0],
     },
+    "beat_angle": [45] * 10,
+    "gybe_angle": [180] * 10,  # no spinnaker: assume she sails the course directly downwind
+    "source": "generic assumption",
 }
+
+TABLES = {"cruiser27": _CRUISER27, "oyster885gt_orc": _ORC_885GT}
 DEFAULT_TABLE = "cruiser27"
 
 
@@ -35,18 +69,58 @@ def _interp(x, xs, ys):
             return ys[i] + (ys[i + 1] - ys[i]) * (x - xs[i]) / (xs[i + 1] - xs[i])
 
 
-def table_speed(tws_kn: float, twa_deg: float, table: str = DEFAULT_TABLE) -> float:
-    """Speed made good along the course (kn) for true wind speed/angle."""
+def _beat(t, tws):
+    """(beat angle, VMG to windward) at this wind speed."""
+    ang = _interp(tws, t["tws"], t["beat_angle"]) if tws > 0 else t["beat_angle"][0]
+    if "beat_vmg" in t:
+        vmg = _interp(tws, t["tws"], t["beat_vmg"])
+    else:  # generic table: speed at its tightest angle, with an allowance for tacking losses
+        vmg = _speed_at(t, tws, ang, beat=None) * math.cos(math.radians(ang)) * 0.85
+    return ang, vmg
+
+
+def _run(t, tws):
+    """(gybe angle, VMG downwind) at this wind speed."""
+    ang = _interp(tws, t["tws"], t["gybe_angle"]) if tws > 0 else t["gybe_angle"][0]
+    if "run_vmg" in t:
+        return ang, _interp(tws, t["tws"], t["run_vmg"])
+    return ang, _speed_at(t, tws, ang, beat=None) * abs(math.cos(math.radians(ang)))
+
+
+def _speed_at(t, tws, twa, beat="auto"):
+    """Boat speed at a TWA from the table, with the optimum beat as an extra point below
+    the table's tightest angle (so speeds between the beat angle and e.g. 52 deg are sane)."""
+    pts = {a: _interp(tws, t["tws"], v) for a, v in t["speeds"].items()}
+    if beat == "auto" and "beat_vmg" in t:
+        b_ang, b_vmg = _beat(t, tws)
+        if b_ang < min(pts):
+            pts[b_ang] = b_vmg / math.cos(math.radians(b_ang))
+    angs = sorted(pts)
+    twa = max(angs[0], min(angs[-1], twa))
+    for a, b in zip(angs, angs[1:]):
+        if a <= twa <= b:
+            return pts[a] + (pts[b] - pts[a]) * (twa - a) / (b - a)
+    return pts[angs[-1]]
+
+
+def table_speed(tws_kn: float, twa_deg: float, table: str = DEFAULT_TABLE, factor: float = 1.0) -> float:
+    """Progress along the course (kn, through the water) for true wind speed/angle.
+
+    Inside the beat angle the yacht tacks: progress = VMG_beat / cos(TWA).
+    Deeper than the gybe angle it gybes: progress = VMG_run / |cos(TWA)|, or sails the
+    course directly if that is faster.
+    """
     t = TABLES[table]
     twa = max(0.0, min(180.0, twa_deg))
-    if twa < 45:
-        return _interp(tws_kn, TWS, t[45]) * math.cos(math.radians(45 - twa)) * 0.75
-    angles = sorted(t)
-    for a, b in zip(angles, angles[1:]):
-        if a <= twa <= b:
-            sa, sb = _interp(tws_kn, TWS, t[a]), _interp(tws_kn, TWS, t[b])
-            return sa + (sb - sa) * (twa - a) / (b - a)
-    return _interp(tws_kn, TWS, t[180])
+    b_ang, b_vmg = _beat(t, tws_kn)
+    g_ang, g_vmg = _run(t, tws_kn)
+    if twa < b_ang:
+        v = b_vmg / math.cos(math.radians(twa))
+    elif twa > g_ang:
+        v = max(_speed_at(t, tws_kn, twa), g_vmg / abs(math.cos(math.radians(twa))))
+    else:
+        v = _speed_at(t, tws_kn, twa)
+    return v * factor
 
 
 # Named destinations with an approach route. Waypoints are illustrative planning

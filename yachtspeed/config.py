@@ -25,6 +25,8 @@ class Yacht:
     length_m: float | None = None
     yb_race: str = ""  # YB Tracking race code, e.g. "arc2026"
     yb_team: str = ""  # team name on the tracker if it differs from `name`
+    speed_table: str = ""  # fallback polar for passages, e.g. "oyster885gt_orc"
+    polar_factor: float = 1.0  # scale for speed_table (racing VPP -> cruising)
 
 
 @dataclass

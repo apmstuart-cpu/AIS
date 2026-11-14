@@ -58,7 +58,8 @@ def point_forecast(conn, cfg, client, model: SogModel, mmsi, lat, lon, when: dat
 
 def passage_forecast(conn, cfg, client, model: SogModel, mmsi, waypoints, departure: datetime,
                      step_nm=10.0, issue=None, wind_provider=None, store=True, speed_table=None,
-                     motor_below_kn=None, motor_speed_kn=None) -> dict:
+                     motor_below_kn=None, motor_speed_kn=None, polar_factor=1.0,
+                     use_current=True) -> dict:
     """Propagate a passage step by step.
 
     Speed per step, in order of preference: the yacht's SOG model; else `speed_table`
@@ -95,8 +96,13 @@ def passage_forecast(conn, cfg, client, model: SogModel, mmsi, waypoints, depart
                 flags.append("thin_support")
             source = "model" if speed else None
             if (speed is None or speed <= 0.5) and speed_table and r.get("wind_speed_kn") is not None:
-                speed, source = table_speed(r["wind_speed_kn"], r["twa_deg"], speed_table), "speed_table"
+                stw = table_speed(r["wind_speed_kn"], r["twa_deg"], speed_table, polar_factor)
+                # the table gives speed through the water; add the along-course current
+                cur = r.get("along_current_kn") if use_current else None
+                speed, source = stw + (cur or 0.0), "speed_table"
                 flags.append("speed_table")
+                if use_current and cur is None:
+                    flags.append("no_current_data")
             if (speed is None or speed <= 0.5) and source != "speed_table" and fallback:
                 speed, source = fallback, "yacht_median"
                 flags.append("fallback_yacht_median")
@@ -115,7 +121,8 @@ def passage_forecast(conn, cfg, client, model: SogModel, mmsi, waypoints, depart
                           "speed_kn": round(speed, 2), "speed_source": source, "hours": round(hours, 2),
                           "flags": flags,
                           "tws_kn": r.get("wind_speed_kn"), "twa_deg": r.get("twa_deg"),
-                          "wave_m": r.get("wave_height_m"), "n_matches": r.get("n_matches")})
+                          "wave_m": r.get("wave_height_m"), "current_kn": r.get("along_current_kn"),
+                          "n_matches": r.get("n_matches")})
             t = t + timedelta(hours=hours)
             idx += 1
     total_nm = sum(s["distance_nm"] for s in steps)

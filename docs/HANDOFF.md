@@ -76,6 +76,16 @@ sudo systemctl restart yachtspeed-collector        # after config changes
 * Earlier issue, now fixed: an invalid key made AISStream drop the connection within 0.5 s with
   no error message. The collector now backs off 15–45 s and logs `early_close`.
 
+## Polars
+
+* `oyster885gt_orc`: the VPP from the ORC Club certificate of the Oyster 885 GT **BABIANA**
+  (GBR, RefNo 038600051DB, issued 2026-10-07), taken from ORC's public data feed. It is a
+  racing prediction: race crew, clean hull, 624 m² asymmetric spinnaker. ALIBI OF LONDON is a
+  2013 885 (not GT), so the config applies `polar_factor = 0.85` until her own AIS/YB history
+  can calibrate it. ORC Sailor Services sells speed guides if a certificate for ALIBI herself
+  is ever wanted.
+* `cruiser27`: a generic assumption, no spinnaker.
+
 ## Not yet verified / known limitations
 
 * **No reports from the two pilot yachts yet** (as of 2026-11-14 16:50 UTC).

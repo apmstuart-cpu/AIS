@@ -1,3 +1,4 @@
+import math
 from datetime import timedelta
 
 import pytest
@@ -17,7 +18,7 @@ def client(conn, handler=None):
 
 def test_speed_table_shape():
     assert table_speed(12, 90) > table_speed(12, 180) > 0
-    assert table_speed(12, 20) < table_speed(12, 45)  # tacking penalty
+    assert table_speed(12, 20) < table_speed(12, 45)  # tacking: progress below the close-hauled speed
     assert table_speed(2, 90) < 2
 
 
@@ -94,3 +95,33 @@ def test_past_wind_does_not_use_metno(conn, cfg):
     with pytest.raises(FetchError):
         point_weather(conn, c, cfg, 33.3, -8.9, utcnow() - timedelta(days=3))
     assert not any("met.no" in u for u, _ in c.http.calls)
+
+
+def test_orc_885_table_matches_certificate_and_gybes_downwind():
+    from yachtspeed.speedtable import TABLES
+
+    assert table_speed(10, 90, "oyster885gt_orc") == pytest.approx(10.88)
+    assert table_speed(10, 90, "oyster885gt_orc", 0.85) == pytest.approx(10.88 * 0.85)
+    dead_run = table_speed(10, 180, "oyster885gt_orc")
+    assert dead_run > TABLES["oyster885gt_orc"]["speeds"][180][3]  # gybing beats sailing dead downwind
+    assert dead_run == pytest.approx(7.45, abs=0.5)  # close to the certificate's run VMG
+    assert table_speed(10, 0, "oyster885gt_orc") == pytest.approx(6.39)  # dead upwind: beat VMG
+    assert table_speed(10, 30, "oyster885gt_orc") == pytest.approx(6.39 / math.cos(math.radians(30)))
+    beat_speed = 6.39 / math.cos(math.radians(41.4))
+    assert beat_speed < table_speed(10, 46, "oyster885gt_orc") < 9.57  # between beat and 52 deg
+    speeds = [table_speed(10, a, "oyster885gt_orc") for a in range(0, 181, 5)]
+    assert all(abs(b - a) < 1.5 for a, b in zip(speeds, speeds[1:]))  # no jumps
+
+
+def test_passage_adds_along_course_current(conn, cfg):
+    # om_body: wind 12 kn from 270, current 1 kn towards 090
+    dep = (utcnow() + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+    east = [(33.0, -10.0), (33.0, -9.0)]  # course ~090: current fully helping
+    empty = SogModel(cfg, [])
+    with_c = passage_forecast(conn, cfg, client(conn), empty, "235000001", east, dep, store=False,
+                              speed_table="oyster885gt_orc")
+    without = passage_forecast(conn, cfg, client(conn), empty, "235000001", east, dep, store=False,
+                               speed_table="oyster885gt_orc", use_current=False)
+    s1, s0 = with_c["steps"][0], without["steps"][0]
+    assert s1["current_kn"] == pytest.approx(1.0, abs=0.05)
+    assert s1["speed_kn"] - s0["speed_kn"] == pytest.approx(1.0, abs=0.05)

@@ -182,11 +182,15 @@ def cmd_passage(cfg, a):
             sys.exit("give --to NAME, or --depart plus at least two lat,lon waypoints")
         wps = [tuple(map(float, w.split(","))) for w in a.waypoints]
         depart, src = parse_iso(a.depart), "waypoints"
+    y = next((y for y in cfg.fleet if y.mmsi == mmsi), None)
+    a.speed_table = a.speed_table or (y.speed_table if y and y.speed_table else "cruiser27")
+    a.polar_factor = a.polar_factor if a.polar_factor is not None else (y.polar_factor if y else 1.0)
     table = None if a.speed_table == "none" else a.speed_table
     try:
         r = passage_forecast(conn, cfg, _client(conn, cfg), model, mmsi, wps, depart, a.step_nm,
                              wind_provider=a.wind_provider, store=not a.no_store, speed_table=table,
-                             motor_below_kn=a.motor_below, motor_speed_kn=a.motor_speed)
+                             motor_below_kn=a.motor_below, motor_speed_kn=a.motor_speed,
+                             polar_factor=a.polar_factor, use_current=not a.no_current)
     except ValueError as e:
         sys.exit(f"cannot forecast passage: {e}")
     r["start"] = src
@@ -201,15 +205,19 @@ def cmd_passage(cfg, a):
           f"({r['duration_hours']} h, avg {r['distance_nm'] / r['duration_hours']:.1f} kn)")
     print(f"start: {src}; route: " + " -> ".join(f"{x},{y}" for x, y in r["route"]))
     print(f"hours by speed source: {r['hours_by_speed_source']}"
-          + ("" if a.motor_below else "  (no motoring)"))
+          + ("" if a.motor_below else "  (no motoring)")
+          + (f"; speed table {table} x{a.polar_factor:g}" if table else "")
+          + ("; current ignored" if a.no_current else "; incl. along-course current"))
     last = None
     for s_ in r["steps"]:
         t = parse_iso(s_["start_utc"])
         if a.steps or last is None or (t - last).total_seconds() >= 6 * 3600 - 60:
             tws = f"{s_['tws_kn']:.1f}" if s_["tws_kn"] is not None else "  ? "
             twa = f"{s_['twa_deg']:.0f}" if s_["twa_deg"] is not None else "?"
+            cur = f"{s_['current_kn']:+.1f}" if s_.get("current_kn") is not None else "  ? "
             print(f"  {t:%a %d %H:%MZ}  {s_['lat']:7.3f} {s_['lon']:8.3f}  wind {tws} kn TWA {twa:>3}  "
-                  f"{s_['speed_kn']:4.1f} kn [{s_['speed_source']}] {' '.join(f for f in s_['flags'] if f != 'speed_table')}")
+                  f"current {cur}  SOG {s_['speed_kn']:4.1f} kn [{s_['speed_source']}] "
+                  f"{' '.join(f for f in s_['flags'] if f not in ('speed_table', 'weak_support'))}")
             last = t
     print(f"  {parse_iso(r['arrival_utc']):%a %d %H:%MZ}  arrive")
 
@@ -424,7 +432,10 @@ def build_parser():
     s.add_argument("--to", help="named destination, e.g. rubicon, las-palmas")
     s.add_argument("--depart", help="ISO UTC departure (default: now / time of --from)")
     s.add_argument("--step-nm", type=float, default=10.0)
-    s.add_argument("--speed-table", default="cruiser27", help="fallback polar when history is thin ('none' to disable)")
+    s.add_argument("--speed-table", help="fallback polar when history is thin: cruiser27, oyster885gt_orc, "
+                   "or 'none' (default: the yacht's speed_table in config, else cruiser27)")
+    s.add_argument("--polar-factor", type=float, help="scale the speed table, e.g. 0.85 (default: config, else 1)")
+    s.add_argument("--no-current", action="store_true", help="ignore ocean current")
     s.add_argument("--motor-below", type=float, help="motor when sailing speed is below this (default: never)")
     s.add_argument("--motor-speed", type=float, default=7.0)
     s.add_argument("--wind-provider")
