@@ -595,6 +595,21 @@ def cmd_route(cfg, a):
                 last = t
 
 
+def cmd_screenshots(cfg, a):
+    from . import screenshots
+
+    conn = _conn(cfg)
+    if a.review:
+        for r in screenshots.review_list(conn, a.hours):
+            print(f"  {r['file']}: {r['status']} ({r['yacht'] or '?'}) {r['notes'] or ''}")
+        return
+    if a.reprocess:
+        conn.execute("DELETE FROM ocr_files WHERE status != 'ok'")
+    res = screenshots.run(conn, cfg)
+    db.heartbeat(conn, "screenshots", res)
+    _print(res)
+
+
 def cmd_destinations(cfg, a):
     from .speedtable import DESTINATIONS
 
@@ -802,6 +817,11 @@ def build_parser():
     s.add_argument("--track-every", type=float, default=3.0)
     start_args(s)
     s.set_defaults(fn=cmd_route)
+    s = sub.add_parser("screenshots", help="read new MarineTraffic screenshots (Dropbox folder) by OCR")
+    s.add_argument("--review", action="store_true", help="list screenshots that could not be read")
+    s.add_argument("--hours", type=int, default=48)
+    s.add_argument("--reprocess", action="store_true", help="retry screenshots that failed before")
+    s.set_defaults(fn=cmd_screenshots)
     sub.add_parser("destinations", help="list named destinations").set_defaults(fn=cmd_destinations)
     sub.add_parser("fetch-land", help="download worldwide 1:10m land for more detailed routing (~10 MB)").set_defaults(
         fn=cmd_fetch_land)

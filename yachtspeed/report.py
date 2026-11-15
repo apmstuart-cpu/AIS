@@ -153,7 +153,9 @@ def build(conn, cfg, models=None) -> dict:
         p["polar"] = polar_evidence(conn, cfg, client, y)
         yachts.append(p)
     st = status(conn, cfg)
+    from .screenshots import review_list
     return {"generated_utc": iso(utcnow()), "models": models, "yachts": yachts,
+            "screenshots_review": review_list(conn, 24),
             "services": {k: v.get("age_min") for k, v in st["services"].items()},
             "collector": st["collector"], "weather": {k: st["weather"][k] for k in
                                                       ("backlog_reports", "match_rate_7d", "api_calls_today", "paused")}}
@@ -199,6 +201,10 @@ def markdown(rep: dict) -> str:
                          f"(IQR {p['p25_pct']}–{p['p75_pct']}%) over {p['fixes']} fixes; "
                          f"configured {p['configured_factor_pct']}%.")
         lines.append("")
+    rv = rep.get("screenshots_review") or []
+    if rv:
+        lines.append("Screenshots needing review (last 24 h): " + "; ".join(
+            f"{r['file']} ({r['notes'] or r['status']})" for r in rv) + "\n")
     lines.append(f"Services (heartbeat age, min): {rep['services']}; collector {rep['collector']}; "
                  f"weather {rep['weather']}")
     return "\n".join(lines) + "\n"

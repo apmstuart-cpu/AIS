@@ -91,6 +91,12 @@ CREATE TABLE IF NOT EXISTS api_usage (
 
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);
 
+-- MarineTraffic screenshots read by OCR on the server
+CREATE TABLE IF NOT EXISTS ocr_files (
+    file TEXT PRIMARY KEY, processed_utc TEXT, status TEXT, yacht TEXT, fix_utc TEXT,
+    lat REAL, lon REAL, sog_kn REAL, cog_deg REAL, stored INTEGER, notes TEXT
+);
+
 -- Live predictions keep issue and valid time so lead-time accuracy can be measured.
 CREATE TABLE IF NOT EXISTS predictions (
     id INTEGER PRIMARY KEY,

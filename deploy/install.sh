@@ -5,7 +5,7 @@ set -euo pipefail
 SRC="$(cd "$(dirname "$0")/.." && pwd)"
 
 apt-get update -qq
-apt-get install -y -qq python3 python3-venv sqlite3 rsync >/dev/null
+apt-get install -y -qq python3 python3-venv sqlite3 rsync tesseract-ocr >/dev/null
 
 id yachtspeed >/dev/null 2>&1 || useradd --system --home /var/lib/yachtspeed --shell /usr/sbin/nologin yachtspeed
 install -d -o yachtspeed -g yachtspeed -m 750 /var/lib/yachtspeed /var/lib/yachtspeed/backups
@@ -36,7 +36,7 @@ mkdir -p /var/log/journal && systemd-tmpfiles --create --prefix /var/log/journal
 systemctl restart systemd-journald
 
 systemctl daemon-reload
-systemctl enable --now yachtspeed-backup.timer yachtspeed-yb.timer yachtspeed-fixes.timer yachtspeed-report.timer
+systemctl enable --now yachtspeed-backup.timer yachtspeed-yb.timer yachtspeed-fixes.timer yachtspeed-report.timer yachtspeed-screenshots.timer
 systemctl enable yachtspeed-collector yachtspeed-enricher
 systemctl restart yachtspeed-enricher
 if grep -q '^AISSTREAM_API_KEY=.\+' /etc/yachtspeed/env && grep -q '^mmsi = "[0-9]\{9\}"' /etc/yachtspeed/config.toml; then

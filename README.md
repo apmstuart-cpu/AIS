@@ -11,6 +11,7 @@ It runs as two supervised services on an always-on Linux host:
 | `yachtspeed-collector` | AISStream websocket → SQLite. Class A (msg 1-3) and Class B (18, 19) positions, plus static data (5, 24) used to verify MMSIs. Keeps the first valid report per vessel, source and 10-minute UTC bucket. Reconnects with back-off. |
 | `yachtspeed-enricher` | Every 2 min, matches reports at least 90 min old to the nearest UTC hour of weather. Fetches one day per grid cell and caches it. Stays inside a call budget, backs off on failures and processes newest data first. |
 | `yachtspeed-yb.timer` | Every 3 h, imports rally satellite-tracker positions (YB Tracking, e.g. the ARC) for yachts with `yb_race` set. These cover the ocean legs that AIS cannot. |
+| `yachtspeed-screenshots.timer` | Hourly at :55, downloads the MarineTraffic screenshot folder (Dropbox shared link in `screenshots_url`), reads new screenshots with Tesseract OCR (hover label, coordinate box, taskbar clock; or the app's position tab) and stores the fixes (source `ocr:marinetraffic`). Unreadable ones are listed in the report, never guessed. |
 | `yachtspeed-report.timer` | Hourly at :05, builds `yachtspeed report` (status, four-model ETAs, polar evidence) and force-pushes it as a single commit to the repo's `server-reports` branch, using a separate write deploy key (`~/.ssh/ais_reports`). |
 | `yachtspeed-backup.timer` | Daily online SQLite backup (gzip, integrity-checked, keeps 14). |
 
