@@ -110,7 +110,8 @@ def purge_stale(conn, days=3) -> list:
         if earlier:
             conn.execute("DELETE FROM enrichment WHERE report_id=?", (r["id"],))
             conn.execute("DELETE FROM ais_reports WHERE id=?", (r["id"],))
-            conn.execute("UPDATE ocr_files SET status='review', stored=0, notes=? WHERE fix_utc=? AND lat=? AND lon=?",
+            conn.execute("UPDATE ocr_files SET status='review', stored=0, notes=? WHERE fix_utc=? "
+                         "AND abs(lat - ?) < 0.001 AND abs(lon - ?) < 0.001",
                          (f"same position as the fix at {earlier}: received time probably misread",
                           r["provider_time_utc"], r["lat"], r["lon"]))
             gone.append((r["mmsi"], r["provider_time_utc"], earlier))
