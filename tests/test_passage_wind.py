@@ -294,3 +294,9 @@ def test_polar_check_scores_fixes(conn, cfg, tmp_path, monkeypatch, capsys):
     out = json.loads(capsys.readouterr().out)
     assert out["summary"]["fixes_scored"] == 1
     assert out["fixes"][0]["ratio"] == pytest.approx(8.5 / (11.32 * out["fixes"][0]["polar_kn"] / out["fixes"][0]["polar_kn"]), rel=0.05)
+
+
+def test_sw96_table_from_certificate():
+    assert table_speed(12, 90, "sw96_orc") == pytest.approx(12.87)
+    assert table_speed(12, 0, "sw96_orc") == pytest.approx(7.80)  # beat VMG
+    assert table_speed(10, 90, "sw96_orc") > table_speed(10, 90, "oyster885gt_orc")  # bigger, faster boat

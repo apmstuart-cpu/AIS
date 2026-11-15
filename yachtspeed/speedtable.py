@@ -39,6 +39,31 @@ _ORC_885GT = {
     "source": "ORC certificate, Oyster 885 GT BABIANA (GBR), 2026-10-07",
 }
 
+# Southern Wind 96 "LIBERTY SQUARED" (SWS 96 #05, Farr design): VPP from her ORC International
+# certificate (GBR, RefNo 03860004L2K, CertNo 041401, issued 2026-04-14), public ORC data feed.
+# Sister ship of SORCERESS (SW96, 2017). RACING prediction: race crew, clean hull, 835 m2
+# asymmetric spinnaker, 5.5 m draft. Sail plan/keel of a given SW96 may differ; use a factor.
+_ORC_SW96 = {
+    "tws": [4, 6, 8, 10, 12, 14, 16, 20, 24],
+    "speeds": {
+        52: [5.96, 8.45, 10.16, 10.99, 11.49, 11.83, 12.07, 12.38, 12.38],
+        60: [6.54, 9.11, 10.78, 11.58, 12.03, 12.32, 12.53, 12.80, 12.85],
+        75: [7.34, 9.97, 11.36, 12.21, 12.61, 12.88, 13.11, 13.44, 13.62],
+        90: [7.51, 10.11, 11.72, 12.41, 12.87, 13.25, 13.55, 14.09, 14.47],
+        110: [6.83, 9.36, 11.21, 12.35, 13.05, 13.62, 14.11, 14.91, 15.51],
+        120: [6.13, 8.62, 10.51, 12.01, 12.83, 13.43, 14.12, 15.37, 16.39],
+        135: [5.10, 7.57, 9.70, 11.40, 12.55, 13.40, 14.29, 15.87, 17.22],
+        150: [4.23, 6.29, 8.18, 9.77, 11.11, 12.20, 13.03, 14.76, 16.93],
+        165: [2.85, 4.32, 5.79, 7.17, 8.50, 9.74, 10.85, 12.51, 13.85],
+        180: [2.42, 3.67, 4.91, 6.14, 7.33, 8.45, 9.52, 11.42, 12.79],
+    },
+    "beat_vmg": [3.75, 5.44, 6.69, 7.38, 7.80, 8.10, 8.33, 8.62, 8.59],
+    "beat_angle": [47.1, 44.5, 42.3, 40.7, 39.7, 39.2, 38.9, 38.6, 39.0],
+    "run_vmg": [3.66, 5.45, 7.08, 8.46, 9.62, 10.58, 11.35, 12.79, 14.66],
+    "gybe_angle": [138.9, 140.3, 140.9, 144.1, 147.1, 151.3, 153.4, 150.5, 147.9],
+    "source": "ORC International certificate, Southern Wind 96 LIBERTY SQUARED (GBR), 2026-04-14",
+}
+
 # Rough generic ~27 m cruiser (no spinnaker). An ASSUMPTION, not a measured polar.
 _CRUISER27 = {
     "tws": [4, 6, 8, 10, 12, 14, 16, 20, 25, 30],
@@ -89,7 +114,8 @@ _OYSTER885_STD = _derive(
            "-5% at 52-60 deg tapering to -1% from 110 deg (keel difference; judgement)",
 )
 
-TABLES = {"cruiser27": _CRUISER27, "oyster885gt_orc": _ORC_885GT, "oyster885_std": _OYSTER885_STD}
+TABLES = {"cruiser27": _CRUISER27, "oyster885gt_orc": _ORC_885GT, "oyster885_std": _OYSTER885_STD,
+          "sw96_orc": _ORC_SW96}
 DEFAULT_TABLE = "cruiser27"
 
 

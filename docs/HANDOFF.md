@@ -87,6 +87,9 @@ sudo systemctl restart yachtspeed-collector        # after config changes
 * `oyster885_std`: BABIANA's polar adjusted for the standard 885's less efficient keel, since
   the rig is similar. Upwind VMG −7% with a beat angle 2° wider, −5% at 52–60°, tapering to
   −1% from 110° downwind. This is judgement, not measurement. ALIBI uses it with `polar_factor = 0.85`.
+* `sw96_orc`: the ORC International VPP of LIBERTY SQUARED (Southern Wind 96 #05, Farr design;
+  GBR, RefNo 03860004L2K, issued 2026-04-14), a sister ship of SORCERESS (SW96, 2017). Racing
+  trim with an 835 m² asymmetric spinnaker; SORCERESS defaults to 85% of it.
 * `cruiser27`: a generic assumption, no spinnaker.
 
 ## Not yet verified / known limitations
