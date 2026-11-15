@@ -83,6 +83,41 @@ def _duplicate(conn, mmsi, fx) -> bool:
     return False
 
 
+def stale_repeat(conn, mmsi, t, lat, lon, sog_kn, exclude_source=None):
+    """An earlier fix at (almost) the same place while the yacht is reported moving means the
+    screenshot showed an old position and its received time was misread. Returns that time."""
+    if sog_kn is None or sog_kn < 2:
+        return None
+    q = ("SELECT provider_time_utc, lat, lon, source FROM ais_reports WHERE mmsi=? AND provider_time_utc BETWEEN ? AND ?"
+         " ORDER BY provider_time_utc DESC")
+    for r in conn.execute(q, (mmsi, iso(t - timedelta(hours=12)), iso(t - timedelta(minutes=30)))):
+        if exclude_source and r["source"] == exclude_source and r["provider_time_utc"] == iso(t):
+            continue
+        if haversine_nm(r["lat"], r["lon"], lat, lon) <= 0.3:
+            return r["provider_time_utc"]
+    return None
+
+
+def purge_stale(conn, days=3) -> list:
+    """Remove screenshot fixes already stored that are stale repeats (see stale_repeat)."""
+    from .geo import parse_iso
+
+    gone = []
+    rows = conn.execute("SELECT id, mmsi, provider_time_utc, lat, lon, sog_kn FROM ais_reports WHERE source='ocr:marinetraffic'"
+                        " AND provider_time_utc >= ?", (iso(utcnow() - timedelta(days=days)),)).fetchall()
+    for r in rows:
+        earlier = stale_repeat(conn, r["mmsi"], parse_iso(r["provider_time_utc"]), r["lat"], r["lon"], r["sog_kn"])
+        if earlier:
+            conn.execute("DELETE FROM enrichment WHERE report_id=?", (r["id"],))
+            conn.execute("DELETE FROM ais_reports WHERE id=?", (r["id"],))
+            conn.execute("UPDATE ocr_files SET status='review', stored=0, notes=? WHERE fix_utc=? AND lat=? AND lon=?",
+                         (f"same position as the fix at {earlier}: received time probably misread",
+                          r["provider_time_utc"], r["lat"], r["lon"]))
+            gone.append((r["mmsi"], r["provider_time_utc"], earlier))
+            log(logger, logging.WARNING, "stale_fix_removed", mmsi=r["mmsi"], time=r["provider_time_utc"], same_as=earlier)
+    return gone
+
+
 def run(conn, cfg, review_dir: Path = REVIEW_DIR) -> dict:
     from .collector import Store
     from .ocr import available, read_screenshot
@@ -92,10 +127,12 @@ def run(conn, cfg, review_dir: Path = REVIEW_DIR) -> dict:
     if not available():
         return {"status": "tesseract_missing"}
     names = {y.name: y.mmsi for y in cfg.fleet if y.mmsi}
+    stale = purge_stale(conn)  # before the review list, so a removed fix's screenshot is published
     done = {r[0] for r in conn.execute("SELECT file FROM ocr_files")}
     manual = manual_files()
     pending = {r[0] for r in conn.execute("SELECT file FROM ocr_files WHERE status != 'ok'")} - manual
-    stats = {"files": 0, "new": 0, "stored": 0, "duplicates": 0, "review": 0}
+    stats = {"files": 0, "new": 0, "stored": 0, "duplicates": 0, "review": 0,
+             "stale_removed": len(stale)}
     tmp = Path(tempfile.mkdtemp(prefix="yachtspeed-ocr-"))
     try:
         files = download(cfg.screenshots_url, tmp)
@@ -118,6 +155,11 @@ def run(conn, cfg, review_dir: Path = REVIEW_DIR) -> dict:
                 stats["review"] += 1
                 continue
             stored = 0
+            if fx.status == "ok":
+                earlier = stale_repeat(conn, names[fx.yacht], fx.fix_utc, fx.lat, fx.lon, fx.sog_kn)
+                if earlier:
+                    fx.status = "review"
+                    fx.notes.append(f"same position as the fix at {earlier}: received time probably misread")
             if fx.status == "ok":
                 mmsi = names[fx.yacht]
                 if _duplicate(conn, mmsi, fx):

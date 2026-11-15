@@ -92,3 +92,25 @@ def test_progress_prorates_legs_across_window_and_days():
     assert w24["hours"] == 24.0 and abs(w24["sailed_nm"] - 24 * 10) < 1  # 60 nm per 6 h leg, pro-rated
     assert [d["day"] for d in p["daily"]] == ["2026-11-14", "2026-11-15"]
     assert p["daily"][0]["hours_covered"] == 12.0 and p["daily"][1]["hours_covered"] == 18.0
+
+
+def test_stale_screenshot_fix_is_removed():
+    from yachtspeed import screenshots
+
+    conn = connect(":memory:")
+    t1, t2 = "2026-11-15T14:58:00Z", "2026-11-15T19:03:00Z"
+    conn.execute("INSERT INTO ais_reports(mmsi, source, bucket_utc, provider_time_utc, ingested_utc, lat, lon, sog_kn) "
+                 "VALUES ('1','ocr:marinetraffic',?,?,?,32.301063,-9.931641,9.3)", (t1, t1, t1))
+    conn.execute("INSERT INTO ais_reports(mmsi, source, bucket_utc, provider_time_utc, ingested_utc, lat, lon, sog_kn) "
+                 "VALUES ('1','ocr:marinetraffic',?,?,?,32.298741,-9.931641,9.3)", (t2, t2, t2))
+    conn.execute("INSERT INTO ocr_files(file, status, fix_utc, lat, lon, stored) VALUES "
+                 "('x.png','ok',?,32.298741,-9.931641,1)", (t2,))
+    monkey_now = screenshots.utcnow
+    screenshots.utcnow = lambda: datetime(2026, 11, 15, 22, tzinfo=timezone.utc)
+    try:
+        gone = screenshots.purge_stale(conn)
+    finally:
+        screenshots.utcnow = monkey_now
+    assert gone == [("1", t2, t1)]
+    assert [r[0] for r in conn.execute("SELECT provider_time_utc FROM ais_reports")] == [t1]
+    assert conn.execute("SELECT status FROM ocr_files").fetchone()[0] == "review"
