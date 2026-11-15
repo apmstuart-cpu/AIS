@@ -1,0 +1,383 @@
+{
+ "yacht": "ALIBI OF LONDON",
+ "table": "oyster885_std",
+ "configured_factor_pct": 85,
+ "filters": {
+  "min_tws_kn": 8.0,
+  "min_twa_deg": 40.0,
+  "max_ratio": 1.3,
+  "every_min": 10
+ },
+ "counts": {
+  "under_way": 17409,
+  "no_wind": 0,
+  "light_or_upwind (likely motoring)": 4284,
+  "too_fast (engine)": 85
+ },
+ "overall": {
+  "points": 13040,
+  "hours": 2173.3,
+  "median_pct": 84,
+  "p25_pct": 77,
+  "p75_pct": 93
+ },
+ "by_wind_and_angle": {
+  "8-12 kn": {
+   "40-70 deg": {
+    "points": 270,
+    "hours": 45.0,
+    "median_pct": 90,
+    "p25_pct": 83,
+    "p75_pct": 98
+   },
+   "70-110 deg": {
+    "points": 496,
+    "hours": 82.7,
+    "median_pct": 87,
+    "p25_pct": 80,
+    "p75_pct": 94
+   },
+   "110-150 deg": {
+    "points": 1509,
+    "hours": 251.5,
+    "median_pct": 88,
+    "p25_pct": 80,
+    "p75_pct": 96
+   },
+   "150-180 deg": {
+    "points": 1509,
+    "hours": 251.5,
+    "median_pct": 102,
+    "p25_pct": 94,
+    "p75_pct": 114
+   }
+  },
+  "12-16 kn": {
+   "40-70 deg": {
+    "points": 223,
+    "hours": 37.2,
+    "median_pct": 93,
+    "p25_pct": 84,
+    "p75_pct": 99
+   },
+   "70-110 deg": {
+    "points": 311,
+    "hours": 51.8,
+    "median_pct": 82,
+    "p25_pct": 71,
+    "p75_pct": 91
+   },
+   "110-150 deg": {
+    "points": 2864,
+    "hours": 477.3,
+    "median_pct": 80,
+    "p25_pct": 74,
+    "p75_pct": 88
+   },
+   "150-180 deg": {
+    "points": 2225,
+    "hours": 370.8,
+    "median_pct": 84,
+    "p25_pct": 78,
+    "p75_pct": 92
+   }
+  },
+  "16-20 kn": {
+   "40-70 deg": {
+    "points": 172,
+    "hours": 28.7,
+    "median_pct": 88,
+    "p25_pct": 81,
+    "p75_pct": 98
+   },
+   "70-110 deg": {
+    "points": 255,
+    "hours": 42.5,
+    "median_pct": 87,
+    "p25_pct": 78,
+    "p75_pct": 93
+   },
+   "110-150 deg": {
+    "points": 1555,
+    "hours": 259.2,
+    "median_pct": 79,
+    "p25_pct": 72,
+    "p75_pct": 85
+   },
+   "150-180 deg": {
+    "points": 865,
+    "hours": 144.2,
+    "median_pct": 79,
+    "p25_pct": 74,
+    "p75_pct": 86
+   }
+  },
+  "20-40 kn": {
+   "40-70 deg": {
+    "points": 1,
+    "hours": 0.2,
+    "median_pct": 52,
+    "p25_pct": 52,
+    "p75_pct": 52
+   },
+   "70-110 deg": {
+    "points": 49,
+    "hours": 8.2,
+    "median_pct": 91,
+    "p25_pct": 87,
+    "p75_pct": 94
+   },
+   "110-150 deg": {
+    "points": 551,
+    "hours": 91.8,
+    "median_pct": 78,
+    "p25_pct": 71,
+    "p75_pct": 83
+   },
+   "150-180 deg": {
+    "points": 185,
+    "hours": 30.8,
+    "median_pct": 75,
+    "p25_pct": 69,
+    "p75_pct": 82
+   }
+  }
+ },
+ "by_angle": {
+  "40-70 deg": {
+   "points": 666,
+   "hours": 111.0,
+   "median_pct": 90,
+   "p25_pct": 82,
+   "p75_pct": 98
+  },
+  "70-110 deg": {
+   "points": 1111,
+   "hours": 185.2,
+   "median_pct": 86,
+   "p25_pct": 77,
+   "p75_pct": 93
+  },
+  "110-150 deg": {
+   "points": 6479,
+   "hours": 1079.8,
+   "median_pct": 81,
+   "p25_pct": 75,
+   "p75_pct": 89
+  },
+  "150-180 deg": {
+   "points": 4784,
+   "hours": 797.3,
+   "median_pct": 87,
+   "p25_pct": 79,
+   "p75_pct": 98
+  }
+ },
+ "by_wind": {
+  "8-12 kn": {
+   "points": 3784,
+   "hours": 630.7,
+   "median_pct": 93,
+   "p25_pct": 84,
+   "p75_pct": 103
+  },
+  "12-16 kn": {
+   "points": 5623,
+   "hours": 937.2,
+   "median_pct": 82,
+   "p25_pct": 76,
+   "p75_pct": 90
+  },
+  "16-20 kn": {
+   "points": 2847,
+   "hours": 474.5,
+   "median_pct": 80,
+   "p25_pct": 74,
+   "p75_pct": 87
+  },
+  "20-40 kn": {
+   "points": 786,
+   "hours": 131.0,
+   "median_pct": 78,
+   "p25_pct": 71,
+   "p75_pct": 84
+  }
+ },
+ "by_month": {
+  "2023-11": {
+   "points": 587,
+   "hours": 97.8,
+   "median_pct": 83,
+   "p25_pct": 74,
+   "p75_pct": 94
+  },
+  "2023-12": {
+   "points": 1492,
+   "hours": 248.7,
+   "median_pct": 88,
+   "p25_pct": 81,
+   "p75_pct": 97
+  },
+  "2024-02": {
+   "points": 18,
+   "hours": 3.0,
+   "median_pct": 91,
+   "p25_pct": 83,
+   "p75_pct": 95
+  },
+  "2024-03": {
+   "points": 119,
+   "hours": 19.8,
+   "median_pct": 74,
+   "p25_pct": 67,
+   "p75_pct": 80
+  },
+  "2024-04": {
+   "points": 894,
+   "hours": 149.0,
+   "median_pct": 82,
+   "p25_pct": 74,
+   "p75_pct": 91
+  },
+  "2024-06": {
+   "points": 70,
+   "hours": 11.7,
+   "median_pct": 87,
+   "p25_pct": 77,
+   "p75_pct": 91
+  },
+  "2024-07": {
+   "points": 43,
+   "hours": 7.2,
+   "median_pct": 93,
+   "p25_pct": 85,
+   "p75_pct": 97
+  },
+  "2024-08": {
+   "points": 661,
+   "hours": 110.2,
+   "median_pct": 84,
+   "p25_pct": 78,
+   "p75_pct": 90
+  },
+  "2024-09": {
+   "points": 751,
+   "hours": 125.2,
+   "median_pct": 85,
+   "p25_pct": 76,
+   "p75_pct": 94
+  },
+  "2024-10": {
+   "points": 571,
+   "hours": 95.2,
+   "median_pct": 83,
+   "p25_pct": 76,
+   "p75_pct": 92
+  },
+  "2024-11": {
+   "points": 1901,
+   "hours": 316.8,
+   "median_pct": 87,
+   "p25_pct": 77,
+   "p75_pct": 100
+  },
+  "2024-12": {
+   "points": 67,
+   "hours": 11.2,
+   "median_pct": 113,
+   "p25_pct": 93,
+   "p75_pct": 120
+  },
+  "2025-01": {
+   "points": 1395,
+   "hours": 232.5,
+   "median_pct": 82,
+   "p25_pct": 77,
+   "p75_pct": 88
+  },
+  "2025-02": {
+   "points": 1491,
+   "hours": 248.5,
+   "median_pct": 81,
+   "p25_pct": 75,
+   "p75_pct": 90
+  },
+  "2025-03": {
+   "points": 33,
+   "hours": 5.5,
+   "median_pct": 70,
+   "p25_pct": 67,
+   "p75_pct": 78
+  },
+  "2025-04": {
+   "points": 127,
+   "hours": 21.2,
+   "median_pct": 81,
+   "p25_pct": 77,
+   "p75_pct": 87
+  },
+  "2025-05": {
+   "points": 1461,
+   "hours": 243.5,
+   "median_pct": 83,
+   "p25_pct": 76,
+   "p75_pct": 91
+  },
+  "2025-06": {
+   "points": 579,
+   "hours": 96.5,
+   "median_pct": 86,
+   "p25_pct": 77,
+   "p75_pct": 94
+  },
+  "2025-08": {
+   "points": 27,
+   "hours": 4.5,
+   "median_pct": 86,
+   "p25_pct": 79,
+   "p75_pct": 99
+  },
+  "2025-09": {
+   "points": 155,
+   "hours": 25.8,
+   "median_pct": 73,
+   "p25_pct": 66,
+   "p75_pct": 81
+  },
+  "2026-05": {
+   "points": 43,
+   "hours": 7.2,
+   "median_pct": 92,
+   "p25_pct": 68,
+   "p75_pct": 100
+  },
+  "2026-07": {
+   "points": 170,
+   "hours": 28.3,
+   "median_pct": 90,
+   "p25_pct": 82,
+   "p75_pct": 101
+  },
+  "2026-08": {
+   "points": 132,
+   "hours": 22.0,
+   "median_pct": 89,
+   "p25_pct": 80,
+   "p75_pct": 98
+  },
+  "2026-09": {
+   "points": 154,
+   "hours": 25.7,
+   "median_pct": 94,
+   "p25_pct": 88,
+   "p75_pct": 98
+  },
+  "2026-11": {
+   "points": 99,
+   "hours": 16.5,
+   "median_pct": 85,
+   "p25_pct": 77,
+   "p75_pct": 94
+  }
+ }
+}
