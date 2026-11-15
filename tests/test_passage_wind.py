@@ -241,3 +241,34 @@ def test_passage_models_cli_shows_spread(conn, cfg, tmp_path, monkeypatch, capsy
     by = {m["model"]: m for m in out["models"]}
     assert by["gfs"]["hours"] < by["ecmwf"]["hours"]  # more wind, faster
     assert out["spread"]["spread_hours"] > 0
+
+
+def test_wave_factor_shapes():
+    from yachtspeed.speedtable import wave_factor
+
+    head, rel = wave_factor(2.0, 0, 0)
+    beam, _ = wave_factor(2.0, 90, 0)
+    follow, relf = wave_factor(2.0, 180, 0)
+    assert rel == 0 and relf == 180
+    assert head == pytest.approx(0.90) and head < beam < 1.0 < follow <= 1.03
+    assert wave_factor(None, 0, 0) == (1.0, None)
+    assert wave_factor(2.0, 0, 0, period_s=5)[0] < head  # short steep seas hurt more
+    assert wave_factor(10.0, 0, 0)[0] == 0.65  # capped
+
+
+def test_passage_applies_head_seas(conn, cfg):
+    # om_body: wind 12 kn from 270; waves 1 m from... om_body has no wave_direction default -> set head seas
+    def handler(u, p):
+        if "marine" in u:
+            return 200, om_body(p, {"wave_height": [2.5] * 24, "wave_direction": [90.0] * 24, "wave_period": [7.0] * 24})
+        return 200, om_body(p)
+    dep = (utcnow() + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+    east = [(33.0, -10.0), (33.0, -9.5)]  # course ~090 into seas from 090
+    empty = SogModel(cfg, [])
+    w = passage_forecast(conn, cfg, client(conn, handler), empty, "235000001", east, dep, store=False,
+                         speed_table="oyster885gt_orc", use_current=False)
+    n = passage_forecast(conn, cfg, client(conn, handler), empty, "235000001", east, dep, store=False,
+                         speed_table="oyster885gt_orc", use_current=False, use_waves=False)
+    s = w["steps"][0]
+    assert s["wave_rel_deg"] < 5 and s["wave_factor"] == pytest.approx(1 - 0.025 * 2.5 ** 2, abs=0.01)
+    assert w["duration_hours"] > n["duration_hours"]

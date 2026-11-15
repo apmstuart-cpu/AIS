@@ -35,6 +35,7 @@ def point_forecast(conn, cfg, client, model: SogModel, mmsi, lat, lon, when: dat
             status=p.status, n_matches=p.n, wind_speed_kn=wx["wind_speed_kn"],
             wind_dir_from_deg=wx["wind_dir_from_deg"], twa_deg=round(twa, 1),
             wave_height_m=wx.get("wave_height_m"), along_current_kn=round(cur, 2) if cur is not None else None,
+            wave_dir_from_deg=wx.get("wave_dir_from_deg"), wave_period_s=wx.get("wave_period_s"),
             sog_median_kn=p.median, sog_p10_kn=p.p10, sog_p25_kn=p.p25, sog_p75_kn=p.p75, sog_p90_kn=p.p90,
             wind_provider=wprov, marine_provider=mprov if "wave_height_m" in wx else None,
         )
@@ -59,7 +60,7 @@ def point_forecast(conn, cfg, client, model: SogModel, mmsi, lat, lon, when: dat
 def passage_forecast(conn, cfg, client, model: SogModel, mmsi, waypoints, departure: datetime,
                      step_nm=10.0, issue=None, wind_provider=None, store=True, speed_table=None,
                      motor_below_kn=None, motor_speed_kn=None, polar_factor=1.0,
-                     use_current=True) -> dict:
+                     use_current=True, use_waves=True) -> dict:
     """Propagate a passage step by step.
 
     Speed per step, in order of preference: the yacht's SOG model; else `speed_table`
@@ -67,7 +68,7 @@ def passage_forecast(conn, cfg, client, model: SogModel, mmsi, waypoints, depart
     If `motor_below_kn` is set, steps slower than that are motored at `motor_speed_kn`.
     Leave it unset for a yacht that cannot motor.
     """
-    from .speedtable import table_speed
+    from .speedtable import table_speed, wave_factor
 
     if len(waypoints) < 2:
         raise ValueError("need at least two waypoints")
@@ -95,8 +96,13 @@ def passage_forecast(conn, cfg, client, model: SogModel, mmsi, waypoints, depart
             elif r.get("n_matches", 0) < 2 * cfg.min_matches:
                 flags.append("thin_support")
             source = "model" if speed else None
+            wave_effect, wave_rel = None, None
             if (speed is None or speed <= 0.5) and speed_table and r.get("wind_speed_kn") is not None:
                 stw = table_speed(r["wind_speed_kn"], r["twa_deg"], speed_table, polar_factor)
+                wf, wave_rel = (wave_factor(r.get("wave_height_m"), r.get("wave_dir_from_deg"), course,
+                                            r.get("wave_period_s")) if use_waves else (1.0, None))
+                stw *= wf
+                wave_effect = round(wf, 3)
                 # the table gives speed through the water; add the along-course current
                 cur = r.get("along_current_kn") if use_current else None
                 speed, source = stw + (cur or 0.0), "speed_table"
@@ -121,7 +127,9 @@ def passage_forecast(conn, cfg, client, model: SogModel, mmsi, waypoints, depart
                           "speed_kn": round(speed, 2), "speed_source": source, "hours": round(hours, 2),
                           "flags": flags,
                           "tws_kn": r.get("wind_speed_kn"), "twa_deg": r.get("twa_deg"),
-                          "wave_m": r.get("wave_height_m"), "current_kn": r.get("along_current_kn"),
+                          "wave_m": r.get("wave_height_m"), "wave_dir_from_deg": r.get("wave_dir_from_deg"),
+                          "wave_period_s": r.get("wave_period_s"), "wave_rel_deg": wave_rel,
+                          "wave_factor": wave_effect, "current_kn": r.get("along_current_kn"),
                           "n_matches": r.get("n_matches")})
             t = t + timedelta(hours=hours)
             idx += 1

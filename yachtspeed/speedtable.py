@@ -157,6 +157,35 @@ def table_speed(tws_kn: float, twa_deg: float, table: str = DEFAULT_TABLE, facto
     return v * factor
 
 
+def wave_factor(hs_m, wave_from_deg, course_deg, period_s=None):
+    """Multiplier on speed through the water for sea state (polars assume flat water).
+
+    A deliberately simple HEURISTIC until a yacht's own data can calibrate it:
+      relative angle 0 = head seas, 180 = following seas
+      head seas (0-60 deg):   loss 2.5 % per m^2 of significant wave height
+      beam seas (60-120 deg): loss 1.2 % per m^2
+      quartering/following (>120 deg): gain 1 % per m, capped at +3 % (surfing)
+    Short, steep seas (period < 6 s) count 30 % more. Losses are capped at 35 %.
+    Returns (factor, relative_angle) or (1.0, None) without wave data.
+    """
+    if hs_m is None or wave_from_deg is None or course_deg is None:
+        return 1.0, None
+    rel = abs((wave_from_deg - course_deg + 180) % 360 - 180)  # 0 = waves on the nose
+    steep = 1.3 if (period_s is not None and period_s < 6) else 1.0
+    hs = max(0.0, min(hs_m, 6.0))
+    if rel <= 60:
+        f = 1 - 0.025 * hs * hs * steep
+    elif rel <= 120:
+        w = (rel - 60) / 60  # blend head -> beam
+        f = 1 - (0.025 * (1 - w) + 0.012 * w) * hs * hs * steep
+    else:
+        w = min(1.0, (rel - 120) / 30)  # beam -> following
+        beam = 1 - 0.012 * hs * hs * steep
+        follow = 1 + min(0.03, 0.01 * hs)
+        f = beam * (1 - w) + follow * w
+    return max(0.65, f), rel
+
+
 # Named destinations with an approach route. Waypoints are illustrative planning
 # points only (not navigational advice): they keep the straight-line model off land.
 DESTINATIONS = {

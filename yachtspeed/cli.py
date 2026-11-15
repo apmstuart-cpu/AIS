@@ -229,7 +229,8 @@ def cmd_passage(cfg, a):
         r = passage_forecast(conn, cfg, _client(conn, cfg), model, mmsi, wps, depart, a.step_nm,
                              wind_provider=a.wind_provider, store=not a.no_store, speed_table=table,
                              motor_below_kn=a.motor_below, motor_speed_kn=a.motor_speed,
-                             polar_factor=a.polar_factor, use_current=not a.no_current)
+                             polar_factor=a.polar_factor, use_current=not a.no_current,
+                             use_waves=not a.no_waves)
     except ValueError as e:
         sys.exit(f"cannot forecast passage: {e}")
     r["start"] = src
@@ -246,7 +247,8 @@ def cmd_passage(cfg, a):
     print(f"hours by speed source: {r['hours_by_speed_source']}"
           + ("" if a.motor_below else "  (no motoring)")
           + (f"; speed table {table} x{a.polar_factor:g}" if table else "")
-          + ("; current ignored" if a.no_current else "; incl. along-course current"))
+          + ("; current ignored" if a.no_current else "; incl. along-course current")
+          + ("; waves ignored" if a.no_waves else "; incl. sea state (wave angle: 0 = head seas)"))
     last = None
     for s_ in r["steps"]:
         t = parse_iso(s_["start_utc"])
@@ -254,8 +256,10 @@ def cmd_passage(cfg, a):
             tws = f"{s_['tws_kn']:.1f}" if s_["tws_kn"] is not None else "  ? "
             twa = f"{s_['twa_deg']:.0f}" if s_["twa_deg"] is not None else "?"
             cur = f"{s_['current_kn']:+.1f}" if s_.get("current_kn") is not None else "  ? "
+            wv = (f"{s_['wave_m']:.1f}m@{s_['wave_rel_deg']:.0f}" if s_.get("wave_rel_deg") is not None
+                  else (f"{s_['wave_m']:.1f}m" if s_.get("wave_m") is not None else "  ? "))
             print(f"  {t:%a %d %H:%MZ}  {s_['lat']:7.3f} {s_['lon']:8.3f}  wind {tws} kn TWA {twa:>3}  "
-                  f"current {cur}  SOG {s_['speed_kn']:4.1f} kn [{s_['speed_source']}] "
+                  f"waves {wv}  current {cur}  SOG {s_['speed_kn']:4.1f} kn [{s_['speed_source']}] "
                   f"{' '.join(f for f in s_['flags'] if f not in ('speed_table', 'weak_support'))}")
             last = t
     print(f"  {parse_iso(r['arrival_utc']):%a %d %H:%MZ}  arrive")
@@ -274,7 +278,8 @@ def _passage_models(conn, cfg, a, model, mmsi, wps, depart, table):
             r = passage_forecast(conn, cfg, client, model, mmsi, wps, depart, a.step_nm,
                                  wind_provider=model_provider(name), store=False, speed_table=table,
                                  motor_below_kn=a.motor_below, motor_speed_kn=a.motor_speed,
-                                 polar_factor=a.polar_factor, use_current=not a.no_current)
+                                 polar_factor=a.polar_factor, use_current=not a.no_current,
+                                 use_waves=not a.no_waves)
         except ValueError as e:
             rows.append({"model": name, "error": str(e)})
             continue
@@ -548,6 +553,7 @@ def build_parser():
                    "or 'none' (default: the yacht's speed_table in config, else cruiser27)")
     s.add_argument("--polar-factor", type=float, help="scale the speed table, e.g. 0.85 (default: config, else 1)")
     s.add_argument("--no-current", action="store_true", help="ignore ocean current")
+    s.add_argument("--no-waves", action="store_true", help="ignore sea state (wave height/direction)")
     s.add_argument("--motor-below", type=float, help="motor when sailing speed is below this (default: never)")
     s.add_argument("--motor-speed", type=float, help="motoring speed (default: config, else 7)")
     s.add_argument("--no-motor", action="store_true", help="ignore the yacht's configured motoring")
