@@ -264,7 +264,8 @@ def route(grid: WeatherGrid, land, start, t0: datetime, dest, table, factor=1.0,
                 if cur is None or score > cur.extra["score"]:
                     new[key] = Node(lat, lon, node.t + timedelta(hours=step_h), node, k, side,
                                     math.hypot(ve, vn), w["wind_speed_kn"], twa, node.maneuvers + man, ds,
-                                    {"score": score})
+                                    {"score": score, "wind_from": round(w["wind_dir_from_deg"]),
+                                     "wave_m": round(w["wave_height_m"], 1) if w.get("wave_height_m") is not None else None})
         if best is not None and (not new or best[0] <= min(n.t for n in new.values())):
             break
         frontier = list(new.values())
@@ -283,7 +284,8 @@ def route(grid: WeatherGrid, land, start, t0: datetime, dest, table, factor=1.0,
     pts = [{"time_utc": iso(x.t), "lat": round(x.lat, 4), "lon": round(x.lon, 4),
             "heading": x.heading, "sog_kn": round(x.sog, 2) if x.sog else None,
             "tws_kn": round(x.tws, 1) if x.tws is not None else None,
-            "twa_deg": round(x.twa) if x.twa is not None else None} for x in track]
+            "twa_deg": round(x.twa) if x.twa is not None else None, "side": x.side or None,
+            "wind_from_deg": x.extra.get("wind_from"), "wave_m": x.extra.get("wave_m")} for x in track]
     maneuvers = node.maneuvers
     if fin:
         if node.side and fin["side"] != node.side:
