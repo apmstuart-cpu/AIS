@@ -30,6 +30,7 @@ class Yacht:
     motor_below_kn: float | None = None  # passages: motor when sailing would be slower than this
     motor_speed_kn: float | None = None  # passages: motoring speed
     destination: str = ""  # named destination for reports, e.g. "rubicon" (see speedtable.DESTINATIONS)
+    forecast: bool = True  # false = recording only: the report shows fixes but no ETAs or routing
 
 
 @dataclass

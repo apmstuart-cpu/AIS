@@ -66,6 +66,7 @@ yb_race = "arc2026"   # ARC 2026 satellite tracker (yb.tl); imported every 3 h b
 speed_table = "sw96_orc"   # ORC VPP of sister ship LIBERTY SQUARED (SWS 96 #05); racing trim
 polar_factor = 0.85
 destination = "las-palmas"
+forecast = false   # recording only (no ETAs or routing in the report)
 notes = "MMSI from MarineTraffic listing (Marshall Islands flag, 32 x 7 m, sailing, call sign V7JW6) supplied by owner 2026-11-20, then near Gibraltar; confirm against her own static broadcast."
 
 [[yacht]]
@@ -78,4 +79,5 @@ verified = true
 motor_below_kn = 10.0   # usually motor-sails on deliveries; passages motor below this
 motor_speed_kn = 10.5
 destination = "tenerife"
+forecast = false   # recording only
 notes = "IMO 1008982. Jamaica flag. Nov 2026: Puerto Banus -> Santa Cruz de Tenerife."

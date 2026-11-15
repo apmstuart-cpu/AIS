@@ -384,3 +384,22 @@ def test_gybing_adds_maneuver_time(conn, cfg):
     assert yes["maneuvers"] > 0 and set(yes["hours_by_sail_mode"]) == {"gybing"}
     extra = yes["duration_hours"] - no["duration_hours"]
     assert extra == pytest.approx(yes["maneuver_hours"], rel=0.05)
+
+
+def test_recording_only_yacht_gets_no_forecast(conn, cfg, monkeypatch):
+    from yachtspeed import report, weather
+    from yachtspeed.ais import Position
+    from yachtspeed.collector import Store
+
+    real_init = weather.OpenMeteo.__init__
+    monkeypatch.setattr(weather.OpenMeteo, "__init__",
+                        lambda self, budget, session=None, timeout=30: real_init(self, budget, FakeSession(
+                            lambda u, p: (200, om_body(p)))))
+    y = cfg.fleet[0]
+    y.destination, y.speed_table, y.forecast = "rubicon", "oyster885_std", False
+    Store(conn, cfg).store_position(Position("235000001", "csv", None, utcnow() - timedelta(hours=1), 32.3, -9.5,
+                                             8.0, 240.0, None, None, None, None), source="csv:test")
+    rep = report.build(conn, cfg, ["ecmwf"])
+    r = rep["yachts"][0]
+    assert r["status"] == "recording only" and "models" not in r and "routed" not in r and r["fix"]
+    assert "recording only" in report.markdown(rep)

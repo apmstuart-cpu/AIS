@@ -49,6 +49,9 @@ def yacht_passage(conn, cfg, client, y, models, max_fix_age_h=24.0, step_nm=10.0
     if out["to_go_nm"] <= ARRIVED_NM and (last["sog_kn"] or 0) < 1.5:
         out["status"] = "arrived"
         return out
+    if not y.forecast:
+        out["status"] = "recording only"
+        return out
     if out["fix"]["age_h"] > max_fix_age_h:
         out["status"] = "fix_too_old"
         return out
@@ -151,7 +154,7 @@ def build(conn, cfg, models=None) -> dict:
         if not y.mmsi:
             continue
         p = yacht_passage(conn, cfg, client, y, models)
-        p["polar"] = polar_evidence(conn, cfg, client, y)
+        p["polar"] = polar_evidence(conn, cfg, client, y) if y.forecast else None
         yachts.append(p)
     st = status(conn, cfg)
     from .screenshots import review_list
