@@ -33,7 +33,7 @@ wave_tol_m = 0.5
 voyage_gap_hours = 6.0
 
 [report]
-report_route_models = ["ecmwf"]   # isochrone routing in the hourly report (add "gfs" etc. at more API cost)
+report_route_models = ["blend"]   # routing in the hourly report: blend = average of ecmwf, aifs, gfs, icon
 report_route_res = 1.0            # forecast grid spacing for report routing (deg)
 
 [backup]

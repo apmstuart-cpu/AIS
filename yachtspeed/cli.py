@@ -558,7 +558,7 @@ def cmd_route(cfg, a):
     models = [m.strip() for m in a.models.split(",")] if a.models else [a.provider]
     results = []
     for m in models:
-        prov = "metno" if m == "metno" else model_provider(m)
+        prov = "metno" if m == "metno" else ("blend" if m in ("blend", "combined") else model_provider(m))
         r = route_yacht(conn, cfg, client, y, (lat, lon), at, dest, prov, res=a.grid_res,
                         step_h=a.step_h, heading_step=a.heading_step, maneuver_min=a.gybe_loss_min)
         if r.get("status") == "ok" and r.get("hours_beyond_forecast", 0) > 0:
@@ -805,8 +805,10 @@ def build_parser():
     s.add_argument("--yacht", required=True)
     s.add_argument("--to", help="named destination (see `yachtspeed destinations`) or LAT,LON "
                                 "(default: the yacht's configured destination)")
-    s.add_argument("--models", help="e.g. ecmwf,aifs,gfs,icon (one route per model)")
-    s.add_argument("--provider", default="ecmwf", help="single model if --models not given; 'metno' for MET Norway")
+    s.add_argument("--models", help="one route per forecast, e.g. blend,ecmwf,aifs,gfs,icon")
+    s.add_argument("--provider", default="blend",
+                   help="forecast if --models not given: blend (average of ecmwf, aifs, gfs, icon; default), "
+                        "a single model, or 'metno'")
     s.add_argument("--speed-table")
     s.add_argument("--polar-factor", type=float)
     s.add_argument("--gybe-loss-min", type=float, default=3.0)

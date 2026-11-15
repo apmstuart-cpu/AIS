@@ -81,8 +81,9 @@ def yacht_passage(conn, cfg, client, y, models, max_fix_age_h=24.0, step_nm=10.0
         out["routed"] = []
         for name in cfg.report_route_models:
             try:
+                prov = "blend" if name in ("blend", "combined") else model_provider(name)
                 rr = route_yacht(conn, cfg, client, y, (last["lat"], last["lon"]), fix_t, dest,
-                                 model_provider(name), res=max(cfg.report_route_res, 0.5),
+                                 prov, res=max(cfg.report_route_res, 0.5),
                                  maneuver_min=3.0)
             except Exception as e:  # never let routing break the report
                 rr = {"status": "error", "error": f"{type(e).__name__}: {e}"[:160]}

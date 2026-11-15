@@ -60,7 +60,7 @@ class Config:
     wave_tol_m: float = 0.5
     voyage_gap_hours: float = 6.0
     # routing in the hourly server report (each model = one gridded forecast download per 6 h)
-    report_route_models: list = field(default_factory=lambda: ["ecmwf"])
+    report_route_models: list = field(default_factory=lambda: ["blend"])  # blend = average of 4 models
     report_route_res: float = 1.0
     # MarineTraffic screenshots read on the server by OCR (Dropbox shared-folder link, view-only)
     screenshots_url: str = ""

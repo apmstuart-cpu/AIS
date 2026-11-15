@@ -163,6 +163,38 @@ class WeatherGrid:
         return out
 
 
+BLEND_MODELS = ["ecmwf", "aifs", "gfs", "icon"]
+
+
+class BlendGrid:
+    """Combined forecast: the average of several model grids at each point and hour.
+    Wind speed is the mean of the models' speeds; direction comes from the mean wind
+    vector (so 350 and 010 average to 000). Sea state and current come from the first
+    grid (they are the same Open-Meteo marine data for every model)."""
+
+    def __init__(self, grids):
+        self.grids = grids
+        self.t0 = grids[0].t0
+        self.data_end_h = min(getattr(g, "data_end_h", 0.0) for g in grids)
+        self.fetches = sum(getattr(g, "fetches", 0) for g in grids)
+        self.missing_cells = sum(getattr(g, "missing_cells", 0) for g in grids)
+        self.lats, self.lons = getattr(grids[0], "lats", []), getattr(grids[0], "lons", [])
+
+    def sample(self, lat, lon, t):
+        samples = [g.sample(lat, lon, t) for g in self.grids]
+        samples = [x for x in samples if x and x.get("wind_speed_kn") is not None]
+        if not samples:
+            return None
+        out = {k: v for k, v in samples[0].items() if not k.startswith("wind")}
+        us = [_uv_from(x["wind_speed_kn"], x["wind_dir_from_deg"]) for x in samples]
+        u = sum(a for a, _ in us) / len(us)
+        v = sum(b for _, b in us) / len(us)
+        out["wind_speed_kn"] = sum(x["wind_speed_kn"] for x in samples) / len(samples)
+        out["wind_dir_from_deg"] = (math.degrees(math.atan2(-u, -v)) + 360) % 360
+        out["models"] = len(samples)
+        return out
+
+
 @dataclass
 class Node:
     lat: float
@@ -337,13 +369,30 @@ def route_yacht(conn, cfg, client, y, start, t0, dest, wind_provider, hours_gues
     res, step_h = auto_settings(start, dest, res, step_h)
     horizon = hours_guess or min(max_days * 24.0, max(24.0, d / 3.0))
     bbox = grid_bbox(start, dest, res=res)
-    grid = WeatherGrid(conn, client, bbox, t0, t0 + timedelta(hours=horizon + 6), wind_provider, res=res).load()
-    grid.hold_beyond_h = max_days * 24.0
+    t_end = t0 + timedelta(hours=horizon + 6)
+    if wind_provider.startswith("blend"):
+        from .weather import model_provider
+
+        names = wind_provider.split(":", 1)[1].split(",") if ":" in wind_provider else BLEND_MODELS
+        grids = []
+        for i, name in enumerate(names):
+            g = WeatherGrid(conn, client, bbox, t0, t_end, model_provider(name.strip()), res=res,
+                            use_marine=(i == 0)).load()
+            g.hold_beyond_h = max_days * 24.0
+            if g.wind:
+                grids.append(g)
+        if not grids:
+            return {"status": "no_forecast", "grid": {"wind_provider": wind_provider}}
+        grid = BlendGrid(grids)
+    else:
+        grid = WeatherGrid(conn, client, bbox, t0, t_end, wind_provider, res=res).load()
+        grid.hold_beyond_h = max_days * 24.0
     land = mask_for_bbox(tuple(round(x, 3) for x in bbox))
     r = route(grid, land, start, t0, dest, y.speed_table or "cruiser27", y.polar_factor,
               step_h=step_h, max_hours=horizon + 6, **kw)
     r["grid"] = {"cells": len(grid.lats) * len(grid.lons), "fetches": grid.fetches, "missing": grid.missing_cells,
-                 "res_deg": res, "step_h": step_h, "wind_provider": wind_provider}
+                 "res_deg": res, "step_h": step_h, "wind_provider": wind_provider,
+                 "models_blended": len(grid.grids) if isinstance(grid, BlendGrid) else 1}
     return r
 
 

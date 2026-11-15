@@ -79,3 +79,16 @@ def test_transatlantic_runs_in_reasonable_time():
     assert r["status"] == "ok", r
     assert 2600 < r["sailed_nm"] < 3300 and 10 * 24 < r["hours"] < 20 * 24
     assert took < 120
+
+
+def test_blend_averages_models_as_vectors():
+    from yachtspeed.router import BlendGrid
+
+    a = ConstGrid(10, 350.0, T0)
+    b = ConstGrid(14, 10.0, T0)
+    w = BlendGrid([a, b]).sample(30, -20, T0)
+    assert w["wind_speed_kn"] == pytest.approx(12.0)
+    assert min(w["wind_dir_from_deg"], 360 - w["wind_dir_from_deg"]) < 2.0  # ~north, not 180
+    assert w["models"] == 2
+    r = route(BlendGrid([a, b]), NO_LAND, (31.0, -20.0), T0, (30.0, -20.0), "oyster885_std", 0.85)
+    assert r["status"] == "ok"
