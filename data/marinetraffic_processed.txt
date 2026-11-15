@@ -7,3 +7,5 @@
 2026-11-15 0100 Alibi of London.png
 2026-11-15 0400 Alibi of London.png
 2026-11-15 0600 Alibi of London.png
+2026-11-15 1200 Dakota.png
+2026-11-15 1200 Sorceress.png

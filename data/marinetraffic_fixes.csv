@@ -7,3 +7,5 @@ mmsi,timestamp_utc,lat,lon,sog_kn,cog_deg,heading_deg,nav_status,yacht,screensho
 235099768,2026-11-15T09:57:00Z,32.622300,-9.536300,7.0,188,,,ALIBI OF LONDON,phone screenshot (Current voyage tab) 10:13
 235099768,2026-11-15T11:19:00Z,32.463426,-9.521027,7.0,172,,,ALIBI OF LONDON,web screenshot ~11:31 (received 12 min ago)
 235099768,2026-11-15T12:27:00Z,32.336700,-9.517600,8.8,242,,,ALIBI OF LONDON,phone screenshot (Current voyage tab) 12:38
+339433000,2026-11-15T11:50:00Z,32.003418,-11.274719,9.1,241,,0,DAKOTA,2026-11-15 1200 Dakota.png
+538071210,2026-11-15T10:02:00Z,32.962586,-10.155487,4.3,188,,,SORCERESS,2026-11-15 1200 Sorceress.png
