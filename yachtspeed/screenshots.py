@@ -25,6 +25,30 @@ logger = logging.getLogger("screenshots")
 IMAGE_EXT = (".png", ".jpg", ".jpeg", ".webp")
 MAX_FILE = 25 * 1024 * 1024
 MAX_FILES = 500
+REVIEW_DIR = Path("/var/lib/yachtspeed/report/review")  # published with the report for a manual read
+MANUAL_CSV = Path("/var/lib/yachtspeed/marinetraffic_fixes.csv")  # fixes typed in from screenshots
+
+
+def manual_files(path: Path = MANUAL_CSV) -> set:
+    """Screenshot names already captured by hand in the repo's fixes CSV."""
+    import csv
+
+    try:
+        with open(path, newline="") as f:
+            return {(r.get("screenshot") or "").strip() for r in csv.DictReader(f)} - {""}
+    except OSError:
+        return set()
+
+
+def _review_copy(src: Path, review_dir: Path) -> None:
+    """Downscaled JPEG of a screenshot that OCR could not read, for a manual read."""
+    from PIL import Image
+
+    review_dir.mkdir(parents=True, exist_ok=True)
+    img = Image.open(src).convert("RGB")
+    if img.width > 1800:
+        img = img.resize((1800, int(img.height * 1800 / img.width)))
+    img.save(review_dir / (src.stem + ".jpg"), "JPEG", quality=85)
 
 
 def _zip_url(url: str) -> str:
@@ -59,7 +83,7 @@ def _duplicate(conn, mmsi, fx) -> bool:
     return False
 
 
-def run(conn, cfg) -> dict:
+def run(conn, cfg, review_dir: Path = REVIEW_DIR) -> dict:
     from .collector import Store
     from .ocr import available, read_screenshot
 
@@ -69,6 +93,8 @@ def run(conn, cfg) -> dict:
         return {"status": "tesseract_missing"}
     names = {y.name: y.mmsi for y in cfg.fleet if y.mmsi}
     done = {r[0] for r in conn.execute("SELECT file FROM ocr_files")}
+    manual = manual_files()
+    pending = {r[0] for r in conn.execute("SELECT file FROM ocr_files WHERE status != 'ok'")} - manual
     stats = {"files": 0, "new": 0, "stored": 0, "duplicates": 0, "review": 0}
     tmp = Path(tempfile.mkdtemp(prefix="yachtspeed-ocr-"))
     try:
@@ -76,6 +102,11 @@ def run(conn, cfg) -> dict:
         stats["files"] = len(files)
         store = Store(conn, cfg)
         for p in sorted(files):
+            if p.name in pending and not (review_dir / (p.stem + ".jpg")).exists():
+                try:
+                    _review_copy(p, review_dir)
+                except Exception as e:
+                    log(logger, logging.WARNING, "review_copy_failed", file=p.name, error=str(e)[:120])
             if p.name in done:
                 continue
             stats["new"] += 1
@@ -99,6 +130,11 @@ def run(conn, cfg) -> dict:
                     stats["stored"] += stored
             else:
                 stats["review"] += 1
+                if p.name not in manual:
+                    try:
+                        _review_copy(p, review_dir)
+                    except Exception as e:
+                        log(logger, logging.WARNING, "review_copy_failed", file=p.name, error=str(e)[:120])
             conn.execute(
                 "INSERT OR REPLACE INTO ocr_files VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (p.name, iso(utcnow()), fx.status, fx.yacht, iso(fx.fix_utc) if fx.fix_utc else None, fx.lat,
@@ -106,12 +142,20 @@ def run(conn, cfg) -> dict:
             log(logger, logging.INFO, "screenshot", file=p.name, status=fx.status, yacht=fx.yacht, stored=stored)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+    # drop review copies once a fix has been captured by hand (or after 3 days)
+    if review_dir.exists():
+        keep = {Path(f).stem for f in pending}
+        for c in review_dir.glob("*.jpg"):
+            old = (utcnow().timestamp() - c.stat().st_mtime) > 3 * 86400
+            if c.stem not in keep or old:
+                c.unlink(missing_ok=True)
     stats["status"] = "ok"
     return stats
 
 
 def review_list(conn, hours=48) -> list[dict]:
     since = iso(utcnow() - timedelta(hours=hours))
+    manual = manual_files()
     return [dict(r) for r in conn.execute(
         "SELECT file, status, yacht, notes FROM ocr_files WHERE status != 'ok' AND processed_utc >= ? ORDER BY file",
-        (since,))]
+        (since,)) if r["file"] not in manual]

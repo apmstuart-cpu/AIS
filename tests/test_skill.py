@@ -51,3 +51,18 @@ def test_verify_day_scores_and_weights(cfg):
     assert sc[1]["gfs"][1] > 2.5 and sc[1]["ecmwf"][1] < 1.5
     w = skill.Weights(conn, ["ecmwf", "aifs", "gfs", "icon"], min_checks=4)
     assert not w.equal and w.at_lead(30)["gfs"] < 0.25 < w.at_lead(30)["ecmwf"]
+
+
+def test_review_list_skips_screenshots_captured_by_hand(tmp_path, monkeypatch):
+    from yachtspeed import screenshots
+
+    conn = connect(":memory:")
+    now = iso(utcnow())
+    for f in ("a.png", "b.png"):
+        conn.execute("INSERT INTO ocr_files(file, processed_utc, status, notes) VALUES (?,?,?,?)",
+                     (f, now, "review", "coordinates not read"))
+    csvp = tmp_path / "fixes.csv"
+    csvp.write_text("mmsi,timestamp_utc,lat,lon,screenshot\n1,2026-11-14T00:00:00Z,1,2,a.png\n")
+    monkeypatch.setattr(screenshots, "MANUAL_CSV", csvp)
+    monkeypatch.setattr(screenshots.manual_files, "__defaults__", (csvp,))
+    assert [r["file"] for r in screenshots.review_list(conn, 24)] == ["b.png"]
