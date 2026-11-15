@@ -95,8 +95,12 @@ def polar_evidence(conn, cfg, client, y, since=None) -> dict | None:
         return None
     q = ("SELECT provider_time_utc, lat, lon, sog_kn, cog_deg FROM ais_reports WHERE mmsi=? AND sog_kn >= 2 "
          "AND cog_deg IS NOT NULL" + (" AND provider_time_utc >= ?" if since else "") + " ORDER BY provider_time_utc")
-    ratios = []
+    ratios, last_t = [], None
     for r in conn.execute(q, (y.mmsi, since) if since else (y.mmsi,)).fetchall():
+        t = parse_iso(r["provider_time_utc"])
+        if last_t is not None and (t - last_t).total_seconds() < 600:
+            continue  # the same fix recorded from two sources (e.g. add-fix and the screenshot log)
+        last_t = t
         try:
             wx, _, _ = point_weather(conn, client, cfg, r["lat"], r["lon"], parse_iso(r["provider_time_utc"]))
         except FetchError:

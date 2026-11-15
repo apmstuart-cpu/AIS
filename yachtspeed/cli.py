@@ -475,7 +475,12 @@ def cmd_polar_check(cfg, a):
                                        "ORDER BY provider_time_utc", (mmsi,))]
         if a.since:
             fixes = [r for r in fixes if r["timestamp_utc"] >= a.since]
+    last_t = None
     for r in fixes:
+        t_fix = parse_iso(r["timestamp_utc"])
+        if last_t is not None and abs((t_fix - last_t).total_seconds()) < 600:
+            continue  # same fix from two sources
+        last_t = t_fix
         try:
             sog, cog = float(r["sog_kn"]), float(r["cog_deg"])
         except (ValueError, KeyError, TypeError):
