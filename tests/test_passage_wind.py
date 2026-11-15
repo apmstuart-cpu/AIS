@@ -272,3 +272,25 @@ def test_passage_applies_head_seas(conn, cfg):
     s = w["steps"][0]
     assert s["wave_rel_deg"] < 5 and s["wave_factor"] == pytest.approx(1 - 0.025 * 2.5 ** 2, abs=0.01)
     assert w["duration_hours"] > n["duration_hours"]
+
+
+def test_polar_check_scores_fixes(conn, cfg, tmp_path, monkeypatch, capsys):
+    from yachtspeed import cli, weather
+
+    real_init = weather.OpenMeteo.__init__
+    monkeypatch.setattr(weather.OpenMeteo, "__init__",
+                        lambda self, budget, session=None, timeout=30: real_init(self, budget, FakeSession(
+                            lambda u, p: (200, om_body(p, {"ocean_current_velocity": [0.0] * 24}
+                                                          if "marine" in u else None)))))
+    t = (utcnow() - timedelta(hours=2)).strftime("%Y-%m-%dT%H:00:00Z")
+    fx = tmp_path / "f.csv"
+    # wind 12 kn from 270 (om_body); course 000 -> TWA 90; polar 885 GT at 12 kn/90 = 11.32
+    fx.write_text("mmsi,timestamp_utc,lat,lon,sog_kn,cog_deg,heading_deg,nav_status,yacht,screenshot\n"
+                  f"235000001,{t},33.0,-10.0,8.5,0,,,TESTBOAT,x\n")
+    cfgfile = tmp_path / "c.toml"
+    cfgfile.write_text(f'db_path = "{cfg.db_path}"\n[[yacht]]\nname = "TESTBOAT"\nmmsi = "235000001"\n')
+    cli.main(["--config", str(cfgfile), "--plain-logs", "polar-check", "--yacht", "TESTBOAT", "--csv", str(fx),
+              "--speed-table", "oyster885gt_orc", "--json"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["summary"]["fixes_scored"] == 1
+    assert out["fixes"][0]["ratio"] == pytest.approx(8.5 / (11.32 * out["fixes"][0]["polar_kn"] / out["fixes"][0]["polar_kn"]), rel=0.05)

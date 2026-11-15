@@ -445,6 +445,66 @@ def cmd_import_yb(cfg, a):
     _print(res or "no yachts have yb_race set in config")
 
 
+def cmd_polar_check(cfg, a):
+    """Score recorded fixes against a speed table: speed through the water (SOG minus the
+    along-course current) as a share of the polar speed (incl. sea state) for the forecast
+    wind at the fix. Builds the evidence for a yacht's polar_factor."""
+    import csv
+    import statistics
+
+    from .geo import along_course_current, wind_angle_to_course
+    from .speedtable import table_speed, wave_factor
+    from .weather import FetchError, point_weather
+
+    conn = _conn(cfg)
+    mmsi = _mmsi(cfg, a.yacht)
+    y = next((y for y in cfg.fleet if y.mmsi == mmsi), None)
+    table = a.speed_table or (y.speed_table if y and y.speed_table else "cruiser27")
+    client = _client(conn, cfg)
+    rows = []
+    with open(a.csv, newline="") as f:
+        fixes = [r for r in csv.DictReader(f) if r["mmsi"].strip() == mmsi]
+    for r in fixes:
+        try:
+            sog, cog = float(r["sog_kn"]), float(r["cog_deg"])
+        except (ValueError, KeyError):
+            continue
+        if sog < a.min_sog:
+            continue
+        t = parse_iso(r["timestamp_utc"])
+        try:
+            wx, prov, _ = point_weather(conn, client, cfg, float(r["lat"]), float(r["lon"]), t)
+        except FetchError as e:
+            rows.append({"time_utc": iso(t), "error": str(e)[:60]})
+            continue
+        tws, twd = wx.get("wind_speed_kn"), wx.get("wind_dir_from_deg")
+        twa = wind_angle_to_course(twd, cog)
+        cur = along_course_current(wx.get("current_speed_kn"), wx.get("current_dir_to_deg"), cog) or 0.0
+        wf, _ = wave_factor(wx.get("wave_height_m"), wx.get("wave_dir_from_deg"), cog, wx.get("wave_period_s"))
+        polar = table_speed(tws, twa, table, 1.0) * wf
+        stw = sog - cur
+        rows.append({"time_utc": iso(t), "tws_kn": round(tws, 1), "twa_deg": round(twa), "wave_m": wx.get("wave_height_m"),
+                     "current_kn": round(cur, 1), "polar_kn": round(polar, 1), "stw_kn": round(stw, 1),
+                     "ratio": round(stw / polar, 3) if polar > 0.5 else None, "wind_provider": prov})
+    ratios = [x["ratio"] for x in rows if x.get("ratio")]
+    summary = {"yacht": a.yacht, "table": table, "fixes_scored": len(ratios),
+               "median_ratio": round(statistics.median(ratios), 3) if ratios else None,
+               "mean_ratio": round(statistics.mean(ratios), 3) if ratios else None,
+               "configured_polar_factor": y.polar_factor if y else None}
+    if a.json:
+        _print({"summary": summary, "fixes": rows})
+        return
+    print(f"{a.yacht} vs {table} (100%): speed through water / polar speed incl. sea state")
+    for x in rows:
+        if "error" in x:
+            print(f"  {x['time_utc']}  no wind: {x['error']}")
+        else:
+            print(f"  {x['time_utc']}  wind {x['tws_kn']:4.1f} kn TWA {x['twa_deg']:3d}  polar {x['polar_kn']:4.1f}  "
+                  f"actual {x['stw_kn']:4.1f}  {x['ratio']:.0%}  [{x['wind_provider']}]")
+    print(f"  median {summary['median_ratio']:.0%} over {len(ratios)} fixes (configured factor "
+          f"{summary['configured_polar_factor']})" if ratios else "  no fixes scored")
+
+
 def cmd_backup(cfg, a):
     from .backup import backup
 
@@ -600,6 +660,13 @@ def build_parser():
     s.add_argument("--yacht", help="with --race: configured yacht to attach positions to")
     s.add_argument("--team", help="with --race: team name on the tracker if different")
     s.set_defaults(fn=cmd_import_yb)
+    s = sub.add_parser("polar-check", help="score recorded fixes against the polar (evidence for polar_factor)")
+    s.add_argument("--yacht", required=True)
+    s.add_argument("--csv", default="data/marinetraffic_fixes.csv")
+    s.add_argument("--speed-table")
+    s.add_argument("--min-sog", type=float, default=2.0)
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_polar_check)
     s = sub.add_parser("backup")
     s.add_argument("--dest")
     s.add_argument("--keep", type=int)

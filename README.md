@@ -44,6 +44,7 @@ yachtspeed passage --yacht X --depart 2026-11-18T08:00Z 39.55,2.63 39.0,3.5   ex
 yachtspeed passage --yacht X --to rubicon --models ecmwf,aifs,gfs,icon   same passage on 4 forecast models: ETA spread
 yachtspeed wind-ahead --yacht "ALIBI OF LONDON" --threshold 10    when will she reach 10 kn on current course/speed
 yachtspeed wind-ahead --yacht X --from 33.62,-8.38 --course 238 --speed 4.5 [--below]
+yachtspeed polar-check --yacht "ALIBI OF LONDON"    each recorded fix as % of the polar (evidence for polar_factor)
 yachtspeed evaluate [--method chrono|voyage]     hold-out MAE vs per-yacht median
 yachtspeed backtest-leadtime --days 1 3 5        held-out rows scored with N-day-old wind forecasts
 yachtspeed backtest-passages                     predicted vs actual voyage durations
