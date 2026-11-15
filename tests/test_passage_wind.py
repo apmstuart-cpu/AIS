@@ -360,7 +360,9 @@ def test_report_builds_json_and_markdown(conn, cfg, tmp_path, monkeypatch):
                                              None, None, None, None), source="csv:test")
     rep = report.build(conn, cfg, ["ecmwf", "gfs"])
     y = rep["yachts"][0]
-    assert y["status"] == "ok" and y["eta"]["median_utc"] and len(y["models"]) == 2
+    assert y["status"] == "ok" and y["eta"]["median_utc"] and y["eta"]["basis"]
+    # one basis only: the routed course's median, or the straight-line fallback, never both
+    assert ("models" in y) != y["eta"]["basis"].startswith("routed")
     assert y["polar"]["fixes"] == 1
     files = report.write(rep, str(tmp_path / "out"))
     md = open(files[1]).read()

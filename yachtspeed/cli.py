@@ -578,17 +578,22 @@ def cmd_route(cfg, a):
         print(f"  {r['model']:8s} {parse_iso(r['eta_utc']):%a %d %H:%MZ}   {r['hours']:6.1f} {r['sailed_nm']:9.1f} "
               f"{r['direct_nm']:9.1f} {r['avg_sog_kn']:6.1f} {r['maneuvers']:11d}"
               + (f"   ({r['note']})" if r.get("note") else ""))
+    ok = [r for r in results if r["status"] == "ok"]
     for r in results:
         cu = r.get("course_under_models")
         if cu:
-            parts = ", ".join(f"{e['model']} {parse_iso(e['eta_utc']):%a %H:%M}" if e.get("eta_utc") else f"{e['model']} n/a"
-                              for e in cu)
-            print(f"  {r['model']} course sailed through each model's weather: {parts}"
-                  + (f"; median {parse_iso(r['course_eta_median_utc']):%a %d %H:%MZ}" if r.get("course_eta_median_utc") else ""))
-    ok = [r for r in results if r["status"] == "ok"]
-    if len(ok) > 1:
+            print(f"  {r['model']} course sailed through each model's weather:")
+            for e in cu:
+                print(f"    {e['model']:8s} " + (f"{parse_iso(e['eta_utc']):%a %d %H:%MZ}  {e['hours']:6.1f} h"
+                                                 if e.get("eta_utc") else str(e.get("status", "n/a"))))
+            if r.get("course_eta_median_utc"):
+                lo, hi = r["course_eta_range_utc"]
+                print(f"  ETA (median of the course under {len([e for e in cu if e.get('eta_utc')])} models): "
+                      f"{parse_iso(r['course_eta_median_utc']):%a %d %H:%MZ}  "
+                      f"(range {parse_iso(lo):%a %d %H:%MZ} to {parse_iso(hi):%a %d %H:%MZ})")
+    if len(ok) > 1 and not any(r.get("course_under_models") for r in ok):
         etas = sorted(parse_iso(r["eta_utc"]) for r in ok)
-        print(f"  spread {etas[0]:%a %d %H:%MZ} to {etas[-1]:%a %d %H:%MZ}; median {etas[len(etas)//2]:%a %d %H:%MZ}")
+        print(f"  spread {etas[0]:%a %d %H:%MZ} to {etas[-1]:%a %d %H:%MZ}")
     if a.track and ok:
         r = ok[0]
         print(f"  track ({r['model']}), every {a.track_every:g} h:")

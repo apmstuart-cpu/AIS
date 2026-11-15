@@ -18,7 +18,7 @@ import math
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
-from .geo import haversine_nm, initial_bearing, iso, utcnow
+from .geo import haversine_nm, initial_bearing, iso, parse_iso, utcnow
 from .speedtable import boat_speed, wave_factor
 
 
@@ -416,7 +416,10 @@ def route_yacht(conn, cfg, client, y, start, t0, dest, wind_provider, hours_gues
             r["course_under_models"].append({"model": name, **ev})
         etas = sorted(e["eta_utc"] for e in r["course_under_models"] if e.get("eta_utc"))
         if etas:
-            r["course_eta_median_utc"] = etas[len(etas) // 2]
+            ts = [parse_iso(e) for e in etas]
+            n = len(ts)
+            mid = ts[n // 2] if n % 2 else ts[n // 2 - 1] + (ts[n // 2] - ts[n // 2 - 1]) / 2
+            r["course_eta_median_utc"] = iso(mid)
             r["course_eta_range_utc"] = [etas[0], etas[-1]]
     return r
 

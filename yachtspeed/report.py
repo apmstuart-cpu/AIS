@@ -55,9 +55,44 @@ def yacht_passage(conn, cfg, client, y, models, max_fix_age_h=24.0, step_nm=10.0
     if out["fix"]["age_h"] > max_fix_age_h:
         out["status"] = "fix_too_old"
         return out
+    table = y.speed_table or "cruiser27"
+    out["speed_table"] = table
+    out["polar_factor"] = y.polar_factor
+    out["motoring"] = bool(y.motor_below_kn)
+    # 1) preferred basis: one course routed through the combined (averaged) weather, then sailed
+    #    through each model's weather; the ETA is the median of those runs
+    if y.speed_table and cfg.report_route_models:
+        from .router import route_yacht
+
+        out["routed"] = []
+        for name in cfg.report_route_models:
+            try:
+                prov = "blend" if name in ("blend", "combined") else model_provider(name)
+                rr = route_yacht(conn, cfg, client, y, (last["lat"], last["lon"]), fix_t, dest,
+                                 prov, res=max(cfg.report_route_res, 0.5),
+                                 maneuver_min=3.0)
+            except Exception as e:  # never let routing break the report
+                rr = {"status": "error", "error": f"{type(e).__name__}: {e}"[:160]}
+            out["routed"].append({"model": name, **{k: rr.get(k) for k in (
+                "status", "eta_utc", "hours", "sailed_nm", "maneuvers", "hours_beyond_forecast", "error",
+                "course_under_models", "course_eta_median_utc", "course_eta_range_utc")}})
+        for rt in out["routed"]:
+            etas = sorted(parse_iso(e["eta_utc"]) for e in (rt.get("course_under_models") or [])
+                          if e.get("eta_utc"))
+            if rt.get("status") == "ok" and etas:
+                used = [e["model"] for e in rt["course_under_models"] if e.get("eta_utc")]
+                out["eta"] = {"median_utc": iso(_median_time(etas)), "earliest_utc": iso(etas[0]),
+                              "latest_utc": iso(etas[-1]),
+                              "spread_h": round((etas[-1] - etas[0]).total_seconds() / 3600, 1),
+                              "basis": f"routed course (combined weather) sailed under {', '.join(used)}",
+                              "runs": len(etas)}
+                out["status"] = "ok"
+                return out
+    # 2) fallback (no polar, or routing failed): straight-line passage under each model
+    from .forecast import passage_forecast
+
     wps = [(last["lat"], last["lon"])] + destination_route(y.destination, last["lat"], last["lon"])
     model = SogModel(cfg, load_observations(conn, cfg, y.mmsi))
-    table = y.speed_table or "cruiser27"
     rows = []
     for name in models:
         try:
@@ -77,36 +112,26 @@ def yacht_passage(conn, cfg, client, y, models, max_fix_age_h=24.0, step_nm=10.0
                      "hours_wind_ge_10": round(sum(s["hours"] for s in r["steps"]
                                                    if s["tws_kn"] is not None and s["tws_kn"] >= 10), 1),
                      "distance_nm": r["distance_nm"], "speed_sources": r["hours_by_speed_source"]})
-    # isochrone routing (needs a polar); the gridded forecast is cached for 6 h
-    if y.speed_table and cfg.report_route_models:
-        from .router import route_yacht
-
-        out["routed"] = []
-        for name in cfg.report_route_models:
-            try:
-                prov = "blend" if name in ("blend", "combined") else model_provider(name)
-                rr = route_yacht(conn, cfg, client, y, (last["lat"], last["lon"]), fix_t, dest,
-                                 prov, res=max(cfg.report_route_res, 0.5),
-                                 maneuver_min=3.0)
-            except Exception as e:  # never let routing break the report
-                rr = {"status": "error", "error": f"{type(e).__name__}: {e}"[:160]}
-            out["routed"].append({"model": name, **{k: rr.get(k) for k in (
-                "status", "eta_utc", "hours", "sailed_nm", "maneuvers", "hours_beyond_forecast", "error",
-                "course_under_models", "course_eta_median_utc", "course_eta_range_utc")}})
     ok = [x for x in rows if "eta_utc" in x]
     out["models"] = rows
-    out["speed_table"] = table
-    out["polar_factor"] = y.polar_factor
-    out["motoring"] = bool(y.motor_below_kn)
     if ok:
         etas = sorted(parse_iso(x["eta_utc"]) for x in ok)
-        out["eta"] = {"median_utc": iso(etas[len(etas) // 2]), "earliest_utc": iso(etas[0]),
+        out["eta"] = {"median_utc": iso(_median_time(etas)), "earliest_utc": iso(etas[0]),
                       "latest_utc": iso(etas[-1]),
-                      "spread_h": round((etas[-1] - etas[0]).total_seconds() / 3600, 1)}
+                      "spread_h": round((etas[-1] - etas[0]).total_seconds() / 3600, 1),
+                      "basis": f"straight line to the waypoints under {', '.join(x['model'] for x in ok)}"
+                               + (" (routing failed)" if out.get("routed") else ""),
+                      "runs": len(etas)}
         out["status"] = "ok"
     else:
         out["status"] = "no_forecast"
     return out
+
+
+def _median_time(ts):
+    """True median of sorted datetimes (mean of the middle two for an even count)."""
+    n = len(ts)
+    return ts[n // 2] if n % 2 else ts[n // 2 - 1] + (ts[n // 2] - ts[n // 2 - 1]) / 2
 
 
 def polar_evidence(conn, cfg, client, y, since=None) -> dict | None:
@@ -171,46 +196,52 @@ def markdown(rep: dict) -> str:
         return parse_iso(s).strftime("%a %d %b %H:%M") if s else "-"
 
     lines = [f"# Yacht report — generated {t(rep['generated_utc'])} UTC", "",
-             "| Yacht | Latest fix (UTC) | Age | Position | SOG / COG | To | To go | ETA median | Range (spread) | Routed ETA |",
-             "|---|---|---|---|---|---|---|---|---|---|"]
+             "| Yacht | Latest fix (UTC) | Age | Position | SOG / COG | To | To go | ETA (median) | Range (spread) |",
+             "|---|---|---|---|---|---|---|---|---|"]
     for y in rep["yachts"]:
         f = y.get("fix") or {}
         pos = f"{f['lat']:.3f}, {f['lon']:.3f}" if f else "-"
         sc = f"{f.get('sog_kn')} kn / {f.get('cog_deg')}°" if f else "-"
         e = y.get("eta") or {}
-        eta = t(e.get("median_utc")) if e else y.get("status", "")
+        eta = f"**{t(e.get('median_utc'))}**" if e else y.get("status", "")
         rng = f"{t(e['earliest_utc'])} – {t(e['latest_utc'])} ({e['spread_h']} h)" if e else ""
-        rt = "; ".join(f"{r['model']} {t(r['eta_utc'])} ({r['maneuvers']} gybes/tacks, {r['sailed_nm']} nm)"
-                       if r.get("status") == "ok" else f"{r['model']} {r.get('status')}"
-                       for r in (y.get("routed") or []))
         lines.append(f"| {y['yacht']} | {t(f.get('time_utc'))} | {f.get('age_h', '-')} h | {pos} | {sc} | "
-                     f"{y.get('destination') or '-'} | {y.get('to_go_nm', '-')} nm | {eta} | {rng} | {rt or '-'} |")
+                     f"{y.get('destination') or '-'} | {y.get('to_go_nm', '-')} nm | {eta} | {rng} |")
     lines.append("")
     for y in rep["yachts"]:
-        if not y.get("models"):
+        e = y.get("eta")
+        if not e:
             continue
         how = "motoring" if y.get("motoring") else f"{y['speed_table']} x{y['polar_factor']:g}, sail only"
         lines += [f"## {y['yacht']} → {y['destination']} ({how})", "",
-                  "| Model | ETA (UTC) | Hours | Avg kn | Wind kn (min–max) | Hours ≥10 kn | Gybes/tacks (time) |",
-                  "|---|---|---|---|---|---|---|"]
-        for m in y["models"]:
-            if "error" in m:
-                lines.append(f"| {m['model']} | unavailable | | | | | |")
-            else:
-                lines.append(f"| {m['model']} | {t(m['eta_utc'])} | {m['hours']} | {m['avg_kn']} | "
-                             f"{m['wind_min_kn']}–{m['wind_max_kn']} | {m['hours_wind_ge_10']} | "
-                             f"{m.get('gybes', 0)} ({m.get('gybe_min', 0)} min) |")
+                  f"ETA **{t(e['median_utc'])} UTC** = median of {e.get('runs', '?')} runs; "
+                  f"basis: {e.get('basis', '-')}.", ""]
+        rt = next((r for r in y.get("routed") or [] if r.get("course_under_models") and r.get("status") == "ok"),
+                  None)
+        if rt and not y.get("models"):
+            lines += [f"Course: {rt['sailed_nm']} nm, {rt['maneuvers']} gybes/tacks (3 min each)"
+                      + (f", {rt['hours_beyond_forecast']} h beyond the forecast end"
+                         if rt.get("hours_beyond_forecast") else "") + ".", "",
+                      "| Same course in weather of | ETA (UTC) | Hours | Gybes/tacks |", "|---|---|---|---|"]
+            for c in rt["course_under_models"]:
+                lines.append(f"| {c['model']} | {t(c.get('eta_utc'))} | {c.get('hours', '-')} | "
+                             f"{c.get('maneuvers', '-')} |" if c.get("eta_utc") else
+                             f"| {c['model']} | {c.get('status', 'unavailable')} | | |")
+        elif y.get("models"):
+            lines += ["| Model (straight line) | ETA (UTC) | Hours | Avg kn | Wind kn (min–max) | Hours ≥10 kn | "
+                      "Gybes/tacks (time) |", "|---|---|---|---|---|---|---|"]
+            for m in y["models"]:
+                if "error" in m:
+                    lines.append(f"| {m['model']} | unavailable | | | | | |")
+                else:
+                    lines.append(f"| {m['model']} | {t(m['eta_utc'])} | {m['hours']} | {m['avg_kn']} | "
+                                 f"{m['wind_min_kn']}–{m['wind_max_kn']} | {m['hours_wind_ge_10']} | "
+                                 f"{m.get('gybes', 0)} ({m.get('gybe_min', 0)} min) |")
         p = y.get("polar")
         if p and p.get("fixes"):
             lines.append(f"\nPolar evidence: median **{p['median_pct']}%** of {p['table']} "
                          f"(IQR {p['p25_pct']}–{p['p75_pct']}%) over {p['fixes']} fixes; "
                          f"configured {p['configured_factor_pct']}%.")
-        for rt in y.get("routed") or []:
-            cu = rt.get("course_under_models")
-            if cu:
-                lines.append(f"\nRouted {rt['model']} course, sailed through each model's weather: " + ", ".join(
-                    f"{e['model']} {t(e['eta_utc'])}" for e in cu if e.get("eta_utc"))
-                    + (f" (median {t(rt['course_eta_median_utc'])})" if rt.get("course_eta_median_utc") else ""))
         lines.append("")
     rv = rep.get("screenshots_review") or []
     if rv:
