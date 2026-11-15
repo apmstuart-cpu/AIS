@@ -110,13 +110,27 @@ def parse_label(text: str):
 
 
 def parse_decimal_coords(text: str):
-    m = re.search(r"\(?\s*(-?\d{1,2}\.\d{4,6})\s*[,;]\s*(-?\d{1,3}\.\d{4,6})\s*\)?", text)
+    m = re.search(r"\(\s*(-?\d{1,2}\.\d{2,6})\s*[,;]\s*(-?\d{1,3}\.\d{2,6})\s*\)", text) or \
+        re.search(r"(-?\d{1,2}\.\d{4,6})\s*[,;]\s*(-?\d{1,3}\.\d{4,6})", text)
     if not m:
-        return None
+        return parse_dm_coords(text)
     lat, lon = float(m.group(1)), float(m.group(2))
     if abs(lat) > 90 or abs(lon) > 180 or (lat == 0 and lon == 0):
         return None
     return lat, lon
+
+
+def parse_dm_coords(text: str):
+    """Degrees and decimal minutes: "32° 38.64 N" / "9° 32.00 W" (OCR may read ° as o, 0 or *)."""
+    la = re.search(r"(\d{1,2})\s*[°o*º]?\s+(\d{1,2}\.\d{1,3})\s*'?\s*([NS])\b", text)
+    lo = re.search(r"(\d{1,3})\s*[°o*º]?\s+(\d{1,2}\.\d{1,3})\s*'?\s*([EW])\b", text)
+    if not la or not lo:
+        return None
+    lat = (int(la.group(1)) + float(la.group(2)) / 60) * (1 if la.group(3) == "N" else -1)
+    lon = (int(lo.group(1)) + float(lo.group(2)) / 60) * (1 if lo.group(3) == "E" else -1)
+    if abs(lat) > 90 or abs(lon) > 180 or float(la.group(2)) >= 60 or float(lo.group(2)) >= 60:
+        return None
+    return round(lat, 6), round(lon, 6)
 
 
 def parse_clock(text: str, near: datetime | None):

@@ -66,3 +66,10 @@ def test_review_list_skips_screenshots_captured_by_hand(tmp_path, monkeypatch):
     monkeypatch.setattr(screenshots, "MANUAL_CSV", csvp)
     monkeypatch.setattr(screenshots.manual_files, "__defaults__", (csvp,))
     assert [r["file"] for r in screenshots.review_list(conn, 24)] == ["b.png"]
+
+
+def test_ocr_reads_three_decimal_and_degree_minute_coords():
+    from yachtspeed.ocr import parse_decimal_coords
+
+    assert parse_decimal_coords("32° 38.64 N\n9° 32.00 W\n(32.644, -9.533386)") == (32.644, -9.533386)
+    assert parse_decimal_coords("32° 38.64 N\n9° 32.00 W") == (32.644, -9.533333)
