@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import statistics
+from datetime import timedelta
 from pathlib import Path
 
 from .geo import haversine_nm, iso, parse_iso, utcnow
@@ -150,6 +151,111 @@ def _median_time(ts):
     return ts[n // 2] if n % 2 else ts[n // 2 - 1] + (ts[n // 2] - ts[n // 2 - 1]) / 2
 
 
+MAX_LEG_KN = 25.0  # a leg implying more than this is a bad fix, not sailing
+
+
+def _fixes(conn, mmsi, since):
+    """Stored fixes since `since`, one per 10 minutes (the same fix can arrive from two sources)."""
+    out = []
+    for r in conn.execute("SELECT provider_time_utc, lat, lon, sog_kn, cog_deg, source FROM ais_reports "
+                          "WHERE mmsi=? AND provider_time_utc >= ? ORDER BY provider_time_utc", (mmsi, iso(since))):
+        t = parse_iso(r["provider_time_utc"])
+        if out and (t - out[-1]["t"]).total_seconds() < 600:
+            continue
+        out.append({"t": t, "lat": r["lat"], "lon": r["lon"], "sog": r["sog_kn"], "cog": r["cog_deg"],
+                    "src": (r["source"] or "").split(":")[0]})
+    return out
+
+
+def _legs(fx):
+    """Consecutive pairs, skipping a fix whose leg implies an impossible speed."""
+    legs, prev = [], None
+    for f in fx:
+        if prev is not None:
+            h = (f["t"] - prev["t"]).total_seconds() / 3600
+            nm = haversine_nm(prev["lat"], prev["lon"], f["lat"], f["lon"])
+            if h > 0 and nm / h > MAX_LEG_KN:
+                continue
+            legs.append((prev, f, nm, h))
+        prev = f
+    return legs
+
+
+def progress(conn, cfg, client, y, now=None, hours=72) -> dict:
+    """How a yacht has been going: distance sailed (straight lines between fixes, so a minimum),
+    average speed, progress toward the destination, daily runs and % of polar, from every
+    stored fix (AIS, rally tracker, screenshots)."""
+    from .speedtable import parse_destination
+
+    now = now or utcnow()
+    fx = _fixes(conn, y.mmsi, now - timedelta(hours=hours))
+    if len(fx) < 2:
+        return {"fixes": len(fx)}
+    try:
+        dest = parse_destination(y.destination)[1] if y.destination else None
+    except KeyError:
+        dest = None
+    legs = _legs(fx)
+    out = {"fixes": len(fx), "sources": {}, "windows": {}, "daily": [],
+           "track": [(iso(f["t"]), round(f["lat"], 4), round(f["lon"], 4)) for f in fx]}
+    for f in fx:
+        out["sources"][f["src"]] = out["sources"].get(f["src"], 0) + 1
+    def clip(t0, t1):
+        """Legs inside [t0, t1], a leg crossing a boundary pro-rated (position interpolated)."""
+        res = []
+        for a, b, nm, h in legs:
+            s0, s1 = max(a["t"], t0), min(b["t"], t1)
+            if s1 <= s0:
+                continue
+            f0 = (s0 - a["t"]).total_seconds() / 3600 / h
+            f1 = (s1 - a["t"]).total_seconds() / 3600 / h
+            pa = {**a, "t": s0, "lat": a["lat"] + (b["lat"] - a["lat"]) * f0, "lon": a["lon"] + (b["lon"] - a["lon"]) * f0}
+            pb = {**b, "t": s1, "lat": a["lat"] + (b["lat"] - a["lat"]) * f1, "lon": a["lon"] + (b["lon"] - a["lon"]) * f1}
+            res.append((pa, pb, nm * (f1 - f0), h * (f1 - f0), b["t"] <= t1))
+        return res
+
+    for label, h in (("6h", 6), ("24h", 24), (f"{hours}h", hours)):
+        lg = clip(now - timedelta(hours=h), now)
+        if not lg:
+            continue
+        a, b = lg[0][0], lg[-1][1]
+        el = sum(x[3] for x in lg)
+        if label == f"{hours}h" and el <= 24.5:
+            continue  # nothing beyond the 24 h window
+        nm = sum(x[2] for x in lg)
+        w = {"from_utc": iso(a["t"]), "to_utc": iso(b["t"]), "hours": round(el, 1), "sailed_nm": round(nm, 1),
+             "avg_kn": round(nm / el, 1) if el > 0 else None,
+             "fixes": len({iso(x[1]["t"]) for x in lg if x[4]})}
+        if dest:
+            made = haversine_nm(a["lat"], a["lon"], *dest) - haversine_nm(b["lat"], b["lon"], *dest)
+            w["made_good_nm"] = round(made, 1)
+            w["vmg_kn"] = round(made / el, 1) if el > 0 else None
+        sogs = [x[1]["sog"] for x in lg if x[4] and x[1]["sog"] is not None]
+        if sogs:
+            w["sog_median_kn"] = round(statistics.median(sogs), 1)
+            w["sog_max_kn"] = round(max(sogs), 1)
+        out["windows"][label] = w
+    d0 = fx[0]["t"].replace(hour=0, minute=0, second=0, microsecond=0)
+    while d0 <= fx[-1]["t"]:
+        lg = clip(d0, d0 + timedelta(days=1))
+        hh = sum(x[3] for x in lg)
+        if hh > 0:
+            nm = sum(x[2] for x in lg)
+            out["daily"].append({"day": d0.date().isoformat(), "sailed_nm": round(nm, 1),
+                                 "hours_covered": round(hh, 1), "avg_kn": round(nm / hh, 1)})
+        d0 += timedelta(days=1)
+    if dest:
+        out["to_go_nm"] = round(haversine_nm(fx[-1]["lat"], fx[-1]["lon"], *dest), 1)
+    if y.speed_table:
+        try:
+            p24 = polar_evidence(conn, cfg, client, y, since=iso(now - timedelta(hours=24)))
+            if p24 and p24.get("fixes"):
+                out["polar_24h"] = {"median_pct": p24["median_pct"], "fixes": p24["fixes"], "table": y.speed_table}
+        except Exception as e:  # weather unavailable must not stop the report
+            out["polar_24h"] = {"error": f"{type(e).__name__}"[:60]}
+    return out
+
+
 def polar_evidence(conn, cfg, client, y, since=None) -> dict | None:
     """Median share of the polar for this yacht's stored fixes (speed through water / polar)."""
     from .geo import along_course_current, wind_angle_to_course
@@ -200,7 +306,11 @@ def build(conn, cfg, models=None) -> dict:
         if not y.mmsi:
             continue
         p = yacht_passage(conn, cfg, client, y, models)
-        p["polar"] = polar_evidence(conn, cfg, client, y) if y.forecast else None
+        p["polar"] = polar_evidence(conn, cfg, client, y)  # also for recording-only yachts with a polar
+        try:
+            p["progress"] = progress(conn, cfg, client, y)
+        except Exception as e:  # never let this break the report
+            p["progress"] = {"error": f"{type(e).__name__}: {e}"[:120]}
         try:  # option 2: log every ETA, record arrivals, so ETA skill can be measured later
             skill.log_etas(conn, p, now)
             if y.destination:
@@ -275,6 +385,29 @@ def markdown(rep: dict) -> str:
                          f"(IQR {p['p25_pct']}–{p['p75_pct']}%) over {p['fixes']} fixes; "
                          f"configured {p['configured_factor_pct']}%.")
         lines.append("")
+    prog = [y for y in rep["yachts"] if (y.get("progress") or {}).get("windows")]
+    if prog:
+        lines += ["## How they've been going", "",
+                  "Distance is straight lines between stored fixes (a minimum); made good = closer to the destination.", "",
+                  "| Yacht | Window | Sailed | Avg | Made good (VMG) | Reported SOG median / max | Fixes |",
+                  "|---|---|---|---|---|---|---|"]
+        for y in prog:
+            for lab, w in y["progress"]["windows"].items():
+                mg = f"{w['made_good_nm']} nm ({w['vmg_kn']} kn)" if "made_good_nm" in w else "-"
+                sog = f"{w.get('sog_median_kn', '-')} / {w.get('sog_max_kn', '-')} kn"
+                lines.append(f"| {y['yacht']} | last {lab} ({w['hours']} h covered) | {w['sailed_nm']} nm | "
+                             f"{w['avg_kn']} kn | {mg} | {sog} | {w['fixes']} |")
+        lines.append("")
+        for y in prog:
+            pr = y["progress"]
+            daily = ", ".join(f"{parse_iso(d['day'] + 'T00:00:00Z'):%a %d} {d['sailed_nm']} nm "
+                              f"({d['hours_covered']} h, {d['avg_kn']} kn)" for d in pr["daily"])
+            pol = pr.get("polar_24h") or {}
+            pol_s = (f"; last 24 h at **{pol['median_pct']}%** of {pol['table']} ({pol['fixes']} fixes)"
+                     if pol.get("median_pct") is not None else "; no polar configured" if not y.get("polar") else "")
+            src = ", ".join(f"{k} {v}" for k, v in pr["sources"].items())
+            lines.append(f"- **{y['yacht']}**: by UTC day {daily}{pol_s}. Fixes: {src}.")
+        lines.append("")
     ms = rep.get("model_skill") or {}
     if any(ms.values()):
         lines.append("Model wind skill (vector error vs consensus analysis, last 30 d): " + "; ".join(
@@ -299,6 +432,14 @@ def write(rep: dict, out_dir: str) -> list[str]:
 
     for old in d.glob("route_*.jpg"):
         old.unlink()
+    from .chart import tracks_jpeg
+
+    try:
+        f = tracks_jpeg(str(d / "route_fleet_tracks.jpg"), rep["yachts"])
+        if f:
+            files.append(f)
+    except Exception as e:
+        rep["chart_error"] = f"tracks: {type(e).__name__}: {e}"[:120]
     for y in rep["yachts"]:
         try:
             f = route_jpeg(str(d / f"route_{_slug(y['yacht'])}.jpg"), y)

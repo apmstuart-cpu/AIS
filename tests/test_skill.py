@@ -73,3 +73,22 @@ def test_ocr_reads_three_decimal_and_degree_minute_coords():
 
     assert parse_decimal_coords("32° 38.64 N\n9° 32.00 W\n(32.644, -9.533386)") == (32.644, -9.533386)
     assert parse_decimal_coords("32° 38.64 N\n9° 32.00 W") == (32.644, -9.533333)
+
+
+def test_progress_prorates_legs_across_window_and_days():
+    from yachtspeed import report
+    from yachtspeed.config import Yacht
+
+    conn = connect(":memory:")
+    # 10 kn due south, one fix every 6 h, from Sat 12:00 to Sun 18:00 UTC
+    t0 = datetime(2026, 11, 14, 12, tzinfo=timezone.utc)
+    for i in range(6):
+        t = iso(t0 + timedelta(hours=6 * i))
+        conn.execute("INSERT INTO ais_reports(mmsi, source, bucket_utc, provider_time_utc, ingested_utc, lat, lon, sog_kn) "
+                     "VALUES ('1','t',?,?,?,?,?,10)", (t, t, t, 33.0 - i * 1.0, -10.0))
+    now = t0 + timedelta(hours=30)
+    p = report.progress(conn, None, None, Yacht(name="X", mmsi="1"), now=now)
+    w24 = p["windows"]["24h"]
+    assert w24["hours"] == 24.0 and abs(w24["sailed_nm"] - 24 * 10) < 1  # 60 nm per 6 h leg, pro-rated
+    assert [d["day"] for d in p["daily"]] == ["2026-11-14", "2026-11-15"]
+    assert p["daily"][0]["hours_covered"] == 12.0 and p["daily"][1]["hours_covered"] == 18.0

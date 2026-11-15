@@ -24,24 +24,15 @@ def _font(size):
         return ImageFont.load_default()
 
 
-def route_jpeg(path, yacht: dict, width=1600, quality=88):
-    """Draw yacht['routed'][0]['track'] with the fix, destination, ETA and wind labels."""
+def _basemap(lats, lons, width=1600, top=110):
+    """Sea, land and a lat/lon grid around the points. Returns (img, draw, xy, fonts, (w, h, top))."""
     from PIL import Image, ImageDraw
 
     from .land import EATL_10M, WORLD_10M, WORLD_50M, _intersects, _load
-    from .speedtable import parse_destination
 
-    rt = next((r for r in yacht.get("routed") or [] if r.get("track")), None)
-    if not rt:
-        return None
-    trk = rt["track"]
-    _, dest = parse_destination(yacht["destination"])
-    lats = [p["lat"] for p in trk] + [dest[0]]
-    lons = [p["lon"] for p in trk] + [dest[1]]
     pad = max(0.4, 0.12 * max(max(lats) - min(lats), max(lons) - min(lons)))
     lat0, lat1, lon0, lon1 = min(lats) - pad, max(lats) + pad, min(lons) - pad, max(lons) + pad
     kx = math.cos(math.radians((lat0 + lat1) / 2))
-    top = 110
     height = int(width * (lat1 - lat0) / ((lon1 - lon0) * kx)) + top
     height = max(600, min(height, 2400))
     sx = width / (lon1 - lon0)
@@ -62,7 +53,8 @@ def route_jpeg(path, yacht: dict, width=1600, quality=88):
         if len(pts) > 2:
             d.polygon(pts, fill=LAND, outline=COAST)
     f_s, f_m, f_l = _font(18), _font(22), _font(30)
-    step = 1.0 if max(lat1 - lat0, lon1 - lon0) < 8 else 2.0 if max(lat1 - lat0, lon1 - lon0) < 20 else 5.0
+    span = max(lat1 - lat0, lon1 - lon0)
+    step = 1.0 if span < 8 else 2.0 if span < 20 else 5.0
     la = math.ceil(lat0 / step) * step
     while la < lat1:
         y = xy(la, lon0)[1]
@@ -75,6 +67,79 @@ def route_jpeg(path, yacht: dict, width=1600, quality=88):
         d.line([(x, top), (x, height)], fill=GRID)
         d.text((x + 3, height - 24), f"{abs(lo):g}°{'E' if lo >= 0 else 'W'}", fill=TEXT, font=f_s)
         lo += step
+    return img, d, xy, (f_s, f_m, f_l), (width, height, top)
+
+
+FLEET_COLOURS = [(200, 30, 40), (20, 90, 190), (210, 120, 0), (120, 40, 150), (20, 130, 90)]
+
+
+def tracks_jpeg(path, yachts: list, hours=72, width=1600, quality=88):
+    """Actual tracks (stored fixes) of every yacht with a progress section, one colour each."""
+    from .speedtable import parse_destination
+
+    ys = [y for y in yachts if (y.get("progress") or {}).get("track")]
+    if not ys:
+        return None
+    lats, lons = [], []
+    for y in ys:
+        lats += [p[1] for p in y["progress"]["track"]]
+        lons += [p[2] for p in y["progress"]["track"]]
+        try:
+            dest = parse_destination(y["destination"])[1] if y.get("destination") else None
+        except KeyError:
+            dest = None
+        y["_dest"] = dest
+        if dest:
+            lats.append(dest[0])
+            lons.append(dest[1])
+    img, d, xy, (f_s, f_m, f_l), (width, height, top) = _basemap(lats, lons, width)
+    for i, y in enumerate(ys):
+        col = FLEET_COLOURS[i % len(FLEET_COLOURS)]
+        pts = [xy(p[1], p[2]) for p in y["progress"]["track"]]
+        if len(pts) > 1:
+            d.line(pts, fill=col, width=4, joint="curve")
+        for x, yy in pts:
+            d.ellipse([x - 3, yy - 3, x + 3, yy + 3], fill=col)
+        last_day = None
+        for p, (x, yy) in zip(y["progress"]["track"], pts):  # a label at each new UTC day
+            day = p[0][:10]
+            if day != last_day and last_day is not None:
+                d.text((x + 8, yy - 20), f"{parse_iso(p[0]):%a %H:%M}", fill=col, font=f_s)
+            last_day = day
+        x, yy = pts[-1]
+        d.rectangle([x - 8, yy - 8, x + 8, yy + 8], fill=col)
+        last = y["progress"]["track"][-1]
+        d.text((x + 12, yy + 4), f"{y['yacht']} {parse_iso(last[0]):%a %H:%M}", fill=col, font=f_m)
+        if y.get("_dest"):
+            dx, dy = xy(*y["_dest"])
+            d.ellipse([dx - 9, dy - 9, dx + 9, dy + 9], outline=col, width=3)
+            d.text((dx + 12, dy - 10), y["destination"], fill=col, font=f_s)
+        y.pop("_dest", None)
+    d.rectangle([0, 0, width, top], fill=(255, 255, 255))
+    d.text((16, 12), f"Fleet tracks, last {hours} h (stored fixes: AIS, ARC tracker, screenshots)", fill=TEXT, font=f_l)
+    x = 16
+    for i, y in enumerate(ys):
+        col = FLEET_COLOURS[i % len(FLEET_COLOURS)]
+        g = (y["progress"].get("windows") or {}).get("24h") or {}
+        lab = f"■ {y['yacht']}" + (f"  24 h: {g['sailed_nm']} nm, {g['avg_kn']} kn" if g.get("sailed_nm") else "")
+        d.text((x, 60), lab, fill=col, font=f_m)
+        x += int(d.textlength(lab, font=f_m) if hasattr(d, "textlength") else 12 * len(lab)) + 40
+    img.save(path, "JPEG", quality=quality, optimize=True)
+    return path
+
+
+def route_jpeg(path, yacht: dict, width=1600, quality=88):
+    """Draw yacht['routed'][0]['track'] with the fix, destination, ETA and wind labels."""
+    from .speedtable import parse_destination
+
+    rt = next((r for r in yacht.get("routed") or [] if r.get("track")), None)
+    if not rt:
+        return None
+    trk = rt["track"]
+    _, dest = parse_destination(yacht["destination"])
+    lats = [p["lat"] for p in trk] + [dest[0]]
+    lons = [p["lon"] for p in trk] + [dest[1]]
+    img, d, xy, (f_s, f_m, f_l), (width, height, top) = _basemap(lats, lons, width)
     line = [xy(p["lat"], p["lon"]) for p in trk]
     d.line(line, fill=TRACK, width=4, joint="curve")
     t0 = parse_iso(trk[0]["time_utc"])
