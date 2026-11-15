@@ -516,6 +516,18 @@ def cmd_polar_check(cfg, a):
           f"{summary['configured_polar_factor']})" if ratios else "  no fixes scored")
 
 
+def cmd_report(cfg, a):
+    from . import report
+
+    conn = _conn(cfg)
+    rep = report.build(conn, cfg, [m.strip() for m in a.models.split(",")] if a.models else None)
+    if a.out:
+        for f in report.write(rep, a.out):
+            print(f)
+    else:
+        print(report.markdown(rep))
+
+
 def cmd_backup(cfg, a):
     from .backup import backup
 
@@ -679,6 +691,10 @@ def build_parser():
     s.add_argument("--min-sog", type=float, default=2.0)
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_polar_check)
+    s = sub.add_parser("report", help="status + multi-model ETAs + polar evidence (JSON and Markdown)")
+    s.add_argument("--out", help="write report.json and report.md to this directory (default: print Markdown)")
+    s.add_argument("--models", help="default ecmwf,aifs,gfs,icon")
+    s.set_defaults(fn=cmd_report)
     s = sub.add_parser("backup")
     s.add_argument("--dest")
     s.add_argument("--keep", type=int)

@@ -29,6 +29,7 @@ class Yacht:
     polar_factor: float = 1.0  # scale for speed_table (racing VPP -> cruising)
     motor_below_kn: float | None = None  # passages: motor when sailing would be slower than this
     motor_speed_kn: float | None = None  # passages: motoring speed
+    destination: str = ""  # named destination for reports, e.g. "rubicon" (see speedtable.DESTINATIONS)
 
 
 @dataclass

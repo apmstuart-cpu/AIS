@@ -340,3 +340,27 @@ def test_polar_check_reads_database_by_default(conn, cfg, tmp_path, monkeypatch,
     cli.main(["--config", str(cfgfile), "--plain-logs", "polar-check", "--yacht", "TESTBOAT",
               "--speed-table", "oyster885gt_orc", "--json"])
     assert json.loads(capsys.readouterr().out)["summary"]["fixes_scored"] == 1
+
+
+def test_report_builds_json_and_markdown(conn, cfg, tmp_path, monkeypatch):
+    from yachtspeed import report, weather
+    from yachtspeed.ais import Position
+    from yachtspeed.collector import Store
+
+    real_init = weather.OpenMeteo.__init__
+    monkeypatch.setattr(weather.OpenMeteo, "__init__",
+                        lambda self, budget, session=None, timeout=30: real_init(self, budget, FakeSession(
+                            lambda u, p: (200, om_body(p)))))
+    cfg.fleet[0].destination = "rubicon"
+    cfg.fleet[0].speed_table = "oyster885_std"
+    cfg.fleet[0].polar_factor = 0.85
+    t = (utcnow() - timedelta(hours=1)).replace(second=0, microsecond=0)
+    Store(conn, cfg).store_position(Position("235000001", "csv", None, t, 32.34, -9.52, 8.8, 242.0,
+                                             None, None, None, None), source="csv:test")
+    rep = report.build(conn, cfg, ["ecmwf", "gfs"])
+    y = rep["yachts"][0]
+    assert y["status"] == "ok" and y["eta"]["median_utc"] and len(y["models"]) == 2
+    assert y["polar"]["fixes"] == 1
+    files = report.write(rep, str(tmp_path / "out"))
+    md = open(files[1]).read()
+    assert "TESTBOAT" in md and "rubicon" in md and "Polar evidence" in md

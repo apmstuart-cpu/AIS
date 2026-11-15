@@ -47,6 +47,7 @@ callsign = "2GQX5"
 length_m = 27.0
 speed_table = "oyster885_std"     # BABIANA's (885 GT) ORC VPP adjusted for the standard 885 keel
 polar_factor = 0.85               # cruising allowance (crew, sails, load) until her own data calibrates it
+destination = "rubicon"
 verified = true
 notes = "MMSI from MarineTraffic listing (name, UK flag, 27 x 6 m, call sign 2GQX5) supplied by owner 2026-11-14; confirm against her own static broadcast. Not 232059724/235088205/228481000 (other ALIBIs, ~12 m)."
 
@@ -60,6 +61,7 @@ verified = true
 yb_race = "arc2026"   # ARC 2026 satellite tracker (yb.tl); imported every 3 h by yachtspeed-yb.timer
 speed_table = "sw96_orc"   # ORC VPP of sister ship LIBERTY SQUARED (SWS 96 #05); racing trim
 polar_factor = 0.85
+destination = "las-palmas"
 notes = "MMSI from MarineTraffic listing (Marshall Islands flag, 32 x 7 m, sailing, call sign V7JW6) supplied by owner 2026-11-20, then near Gibraltar; confirm against her own static broadcast."
 
 [[yacht]]
@@ -71,4 +73,5 @@ length_m = 39.0
 verified = true
 motor_below_kn = 10.0   # usually motor-sails on deliveries; passages motor below this
 motor_speed_kn = 10.5
+destination = "tenerife"
 notes = "IMO 1008982. Jamaica flag. Nov 2026: Puerto Banus -> Santa Cruz de Tenerife."

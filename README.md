@@ -11,6 +11,7 @@ It runs as two supervised services on an always-on Linux host:
 | `yachtspeed-collector` | AISStream websocket → SQLite. Class A (msg 1-3) and Class B (18, 19) positions, plus static data (5, 24) used to verify MMSIs. Keeps the first valid report per vessel, source and 10-minute UTC bucket. Reconnects with back-off. |
 | `yachtspeed-enricher` | Every 2 min, matches reports at least 90 min old to the nearest UTC hour of weather. Fetches one day per grid cell and caches it. Stays inside a call budget, backs off on failures and processes newest data first. |
 | `yachtspeed-yb.timer` | Every 3 h, imports rally satellite-tracker positions (YB Tracking, e.g. the ARC) for yachts with `yb_race` set. These cover the ocean legs that AIS cannot. |
+| `yachtspeed-report.timer` | Hourly at :05, builds `yachtspeed report` (status, four-model ETAs, polar evidence) and force-pushes it as a single commit to the repo's `server-reports` branch, using a separate write deploy key (`~/.ssh/ais_reports`). |
 | `yachtspeed-backup.timer` | Daily online SQLite backup (gzip, integrity-checked, keeps 14). |
 
 ## Install on the server
@@ -44,6 +45,7 @@ yachtspeed passage --yacht X --depart 2026-11-18T08:00Z 39.55,2.63 39.0,3.5   ex
 yachtspeed passage --yacht X --to rubicon --models ecmwf,aifs,gfs,icon   same passage on 4 forecast models: ETA spread
 yachtspeed wind-ahead --yacht "ALIBI OF LONDON" --threshold 10    when will she reach 10 kn on current course/speed
 yachtspeed wind-ahead --yacht X --from 33.62,-8.38 --course 238 --speed 4.5 [--below]
+yachtspeed report [--out DIR]                    status + four-model ETAs (yachts with `destination`) + polar evidence
 yachtspeed polar-check --yacht "ALIBI OF LONDON"    each recorded fix as % of the polar (evidence for polar_factor)
 yachtspeed evaluate [--method chrono|voyage]     hold-out MAE vs per-yacht median
 yachtspeed backtest-leadtime --days 1 3 5        held-out rows scored with N-day-old wind forecasts

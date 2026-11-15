@@ -28,13 +28,15 @@ install -m 644 "$SRC"/deploy/systemd/yachtspeed-*.service "$SRC"/deploy/systemd/
 OWNER="$(stat -c %U "$SRC")"; OWNER_HOME="$(getent passwd "$OWNER" | cut -d: -f6)"
 sed -e "s|@SRC@|$SRC|g" -e "s|@OWNER@|$OWNER|g" -e "s|@HOME@|$OWNER_HOME|g" "$SRC/deploy/systemd/yachtspeed-fixes.service.in" \
   > /etc/systemd/system/yachtspeed-fixes.service
+sed -e "s|@SRC@|$SRC|g" -e "s|@OWNER@|$OWNER|g" -e "s|@HOME@|$OWNER_HOME|g" "$SRC/deploy/systemd/yachtspeed-report.service.in" \
+  > /etc/systemd/system/yachtspeed-report.service
 
 # keep logs across reboots
 mkdir -p /var/log/journal && systemd-tmpfiles --create --prefix /var/log/journal >/dev/null 2>&1 || true
 systemctl restart systemd-journald
 
 systemctl daemon-reload
-systemctl enable --now yachtspeed-backup.timer yachtspeed-yb.timer yachtspeed-fixes.timer
+systemctl enable --now yachtspeed-backup.timer yachtspeed-yb.timer yachtspeed-fixes.timer yachtspeed-report.timer
 systemctl enable yachtspeed-collector yachtspeed-enricher
 systemctl restart yachtspeed-enricher
 if grep -q '^AISSTREAM_API_KEY=.\+' /etc/yachtspeed/env && grep -q '^mmsi = "[0-9]\{9\}"' /etc/yachtspeed/config.toml; then

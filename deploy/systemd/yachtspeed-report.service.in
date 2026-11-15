@@ -1,0 +1,9 @@
+[Unit]
+Description=yachtspeed: build the hourly report and publish it to the repo (server-reports branch)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=@SRC@/deploy/publish-report.sh @OWNER@ @HOME@
+SuccessExitStatus=78
