@@ -91,7 +91,8 @@ def yacht_passage(conn, cfg, client, y, models, max_fix_age_h=24.0, step_nm=10.0
             except Exception as e:  # never let routing break the report
                 rr = {"status": "error", "error": f"{type(e).__name__}: {e}"[:160]}
             out["routed"].append({"model": name, **{k: rr.get(k) for k in (
-                "status", "eta_utc", "hours", "sailed_nm", "maneuvers", "hours_beyond_forecast", "error")}})
+                "status", "eta_utc", "hours", "sailed_nm", "maneuvers", "hours_beyond_forecast", "error",
+                "course_under_models", "course_eta_median_utc", "course_eta_range_utc")}})
     ok = [x for x in rows if "eta_utc" in x]
     out["models"] = rows
     out["speed_table"] = table
@@ -204,6 +205,12 @@ def markdown(rep: dict) -> str:
             lines.append(f"\nPolar evidence: median **{p['median_pct']}%** of {p['table']} "
                          f"(IQR {p['p25_pct']}–{p['p75_pct']}%) over {p['fixes']} fixes; "
                          f"configured {p['configured_factor_pct']}%.")
+        for rt in y.get("routed") or []:
+            cu = rt.get("course_under_models")
+            if cu:
+                lines.append(f"\nRouted {rt['model']} course, sailed through each model's weather: " + ", ".join(
+                    f"{e['model']} {t(e['eta_utc'])}" for e in cu if e.get("eta_utc"))
+                    + (f" (median {t(rt['course_eta_median_utc'])})" if rt.get("course_eta_median_utc") else ""))
         lines.append("")
     rv = rep.get("screenshots_review") or []
     if rv:

@@ -114,3 +114,25 @@ def test_grid_waits_for_per_minute_budget(conn, monkeypatch):
                            use_marine=False)
     g.load()
     assert calls["n"] == 2 and calls["slept"] == 1 and g.missing_cells == 0
+
+
+def test_sail_track_reproduces_route_time_on_same_forecast():
+    from yachtspeed.router import sail_track
+
+    g = ConstGrid(13, 30.0, T0)  # NE breeze, broad reach / run to the SW
+    r = route(g, NO_LAND, (32.0, -10.0), T0, (30.5, -12.0), "oyster885_std", 0.85, step_h=1.0)
+    ev = sail_track(g, r["track"], T0, "oyster885_std", 0.85, use_waves=False, use_current=False)
+    assert ev["status"] == "ok"
+    assert ev["hours"] == pytest.approx(r["hours"], rel=0.06)
+
+
+def test_course_under_other_models():
+    from yachtspeed.router import BlendGrid, sail_track
+
+    light = ConstGrid(8, 30.0, T0)
+    fresh = ConstGrid(18, 30.0, T0)
+    blend = BlendGrid([light, fresh], ["light", "fresh"])
+    r = route(blend, NO_LAND, (32.0, -10.0), T0, (30.5, -12.0), "oyster885_std", 0.85, step_h=1.0)
+    h_light = sail_track(light, r["track"], T0, "oyster885_std", 0.85)["hours"]
+    h_fresh = sail_track(fresh, r["track"], T0, "oyster885_std", 0.85)["hours"]
+    assert h_fresh < r["hours"] < h_light  # the same course is faster in more wind

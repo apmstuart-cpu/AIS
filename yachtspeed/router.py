@@ -183,8 +183,9 @@ class BlendGrid:
     vector (so 350 and 010 average to 000). Sea state and current come from the first
     grid (they are the same Open-Meteo marine data for every model)."""
 
-    def __init__(self, grids):
+    def __init__(self, grids, names=None):
         self.grids = grids
+        self.names = names or [f"model{i + 1}" for i in range(len(grids))]
         self.t0 = grids[0].t0
         self.data_end_h = min(getattr(g, "data_end_h", 0.0) for g in grids)
         self.fetches = sum(getattr(g, "fetches", 0) for g in grids)
@@ -385,16 +386,17 @@ def route_yacht(conn, cfg, client, y, start, t0, dest, wind_provider, hours_gues
         from .weather import model_provider
 
         names = wind_provider.split(":", 1)[1].split(",") if ":" in wind_provider else BLEND_MODELS
-        grids = []
+        grids, used = [], []
         for i, name in enumerate(names):
             g = WeatherGrid(conn, client, bbox, t0, t_end, model_provider(name.strip()), res=res,
-                            use_marine=(i == 0)).load()
+                            use_marine=(not grids)).load()
             g.hold_beyond_h = max_days * 24.0
             if g.wind:
                 grids.append(g)
+                used.append(name.strip())
         if not grids:
             return {"status": "no_forecast", "grid": {"wind_provider": wind_provider}}
-        grid = BlendGrid(grids)
+        grid = BlendGrid(grids, used)
     else:
         grid = WeatherGrid(conn, client, bbox, t0, t_end, wind_provider, res=res).load()
         grid.hold_beyond_h = max_days * 24.0
@@ -404,7 +406,84 @@ def route_yacht(conn, cfg, client, y, start, t0, dest, wind_provider, hours_gues
     r["grid"] = {"cells": len(grid.lats) * len(grid.lons), "fetches": grid.fetches, "missing": grid.missing_cells,
                  "res_deg": res, "step_h": step_h, "wind_provider": wind_provider,
                  "models_blended": len(grid.grids) if isinstance(grid, BlendGrid) else 1}
+    if isinstance(grid, BlendGrid) and r.get("status") == "ok":
+        # how does this one course fare if any single model turns out to be right?
+        marine = grid.grids[0]
+        r["course_under_models"] = []
+        for name, g in zip(grid.names, grid.grids):
+            ev = sail_track(_MemberView(g, marine), r["track"], t0, y.speed_table or "cruiser27", y.polar_factor,
+                            maneuver_min=kw.get("maneuver_min", 3.0))
+            r["course_under_models"].append({"model": name, **ev})
+        etas = sorted(e["eta_utc"] for e in r["course_under_models"] if e.get("eta_utc"))
+        if etas:
+            r["course_eta_median_utc"] = etas[len(etas) // 2]
+            r["course_eta_range_utc"] = [etas[0], etas[-1]]
     return r
+
+
+class _MemberView:
+    """One model's wind with the shared sea state and current."""
+
+    def __init__(self, wind_grid, marine_grid):
+        self.w, self.m = wind_grid, marine_grid
+        self.t0 = wind_grid.t0
+
+    def sample(self, lat, lon, t):
+        a = self.w.sample(lat, lon, t)
+        if a is None:
+            return None
+        if self.m is not self.w:
+            b = self.m.sample(lat, lon, t) or {}
+            a = {**{k: v for k, v in b.items() if not k.startswith("wind")}, **a}
+        return a
+
+
+def sail_track(grid, track, t0: datetime, table, factor=1.0, maneuver_min=3.0, sub_nm=2.0,
+               use_waves=True, use_current=True, gybe_every_h=4.0) -> dict:
+    """Sail a fixed sequence of track points through a (different) forecast.
+
+    Each leg keeps its line; speed along it comes from the polar for that forecast's wind,
+    tacking or gybing at the optimum angle where the leg is unsailable or slower direct
+    (VMG, plus `maneuver_min` every `gybe_every_h`), with waves and current. A change of
+    wind side between legs costs `maneuver_min`."""
+    from .speedtable import table_speed_mode
+
+    pts = [(p["lat"], p["lon"]) for p in track]
+    t = t0
+    maneuvers = 0.0
+    last_side = None
+    for (la1, lo1), (la2, lo2) in zip(pts, pts[1:]):
+        leg = haversine_nm(la1, lo1, la2, lo2)
+        if leg < 0.01:
+            continue
+        brg = initial_bearing(la1, lo1, la2, lo2)
+        n = max(1, int(math.ceil(leg / sub_nm)))
+        for i in range(n):
+            f = (i + 0.5) / n
+            la, lo = la1 + (la2 - la1) * f, lo1 + (lo2 - lo1) * f
+            w = grid.sample(la, lo, t)
+            if w is None:
+                return {"status": "no_forecast", "eta_utc": None}
+            twa_signed = ((w["wind_dir_from_deg"] - brg + 540) % 360) - 180
+            side = 1 if twa_signed > 0 else -1
+            if i == 0 and last_side is not None and side != last_side:
+                t += timedelta(minutes=maneuver_min)
+                maneuvers += 1
+            last_side = side
+            stw, mode = table_speed_mode(w["wind_speed_kn"], abs(twa_signed), table, factor)
+            if use_waves:
+                stw *= wave_factor(w.get("wave_height_m"), w.get("wave_dir_from_deg"), brg, w.get("wave_period_s"))[0]
+            sog = stw
+            if use_current and "current_u" in w:
+                sog += w["current_u"] * math.sin(math.radians(brg)) + w["current_v"] * math.cos(math.radians(brg))
+            sog = max(sog, 0.3)
+            hours = (leg / n) / sog
+            if mode in ("tacking", "gybing") and gybe_every_h:
+                maneuvers += hours / gybe_every_h
+                hours += hours / gybe_every_h * maneuver_min / 60
+            t += timedelta(hours=hours)
+    return {"status": "ok", "eta_utc": iso(t), "hours": round((t - t0).total_seconds() / 3600, 2),
+            "maneuvers": round(maneuvers)}
 
 
 def _now():

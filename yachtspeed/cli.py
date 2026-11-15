@@ -578,6 +578,13 @@ def cmd_route(cfg, a):
         print(f"  {r['model']:8s} {parse_iso(r['eta_utc']):%a %d %H:%MZ}   {r['hours']:6.1f} {r['sailed_nm']:9.1f} "
               f"{r['direct_nm']:9.1f} {r['avg_sog_kn']:6.1f} {r['maneuvers']:11d}"
               + (f"   ({r['note']})" if r.get("note") else ""))
+    for r in results:
+        cu = r.get("course_under_models")
+        if cu:
+            parts = ", ".join(f"{e['model']} {parse_iso(e['eta_utc']):%a %H:%M}" if e.get("eta_utc") else f"{e['model']} n/a"
+                              for e in cu)
+            print(f"  {r['model']} course sailed through each model's weather: {parts}"
+                  + (f"; median {parse_iso(r['course_eta_median_utc']):%a %d %H:%MZ}" if r.get("course_eta_median_utc") else ""))
     ok = [r for r in results if r["status"] == "ok"]
     if len(ok) > 1:
         etas = sorted(parse_iso(r["eta_utc"]) for r in ok)
