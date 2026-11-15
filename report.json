@@ -1,0 +1,513 @@
+{
+  "generated_utc": "2026-11-28T12:05:38Z",
+  "models": [
+    "ecmwf",
+    "aifs",
+    "gfs",
+    "icon"
+  ],
+  "yachts": [
+    {
+      "yacht": "ALIBI OF LONDON",
+      "mmsi": "235099768",
+      "destination": "rubicon",
+      "fix": {
+        "time_utc": "2026-11-25T06:23:00Z",
+        "lat": 20.934507,
+        "lon": -26.695404,
+        "sog_kn": 11.3,
+        "cog_deg": 200.0,
+        "source": "ocr:marinetraffic",
+        "age_h": 77.7
+      },
+      "to_go_nm": 846.5,
+      "status": "fix_too_old",
+      "polar": {
+        "fixes": 67,
+        "approach_fixes_skipped": 8,
+        "median_pct": 89,
+        "p25_pct": 78,
+        "p75_pct": 98,
+        "configured_factor_pct": 85,
+        "table": "oyster885_std"
+      },
+      "port_calls": [
+        {
+          "port": "GIBRALTAR WEST ANCH, GI",
+          "arrival_utc": "2026-11-13T07:33:00Z",
+          "departure_utc": "2026-11-13T08:07:00Z"
+        },
+        {
+          "port": "GIBRALTAR WEST ANCH, GL",
+          "arrival_utc": "2026-11-13T07:33:00Z",
+          "departure_utc": "2026-11-13T08:07:00Z"
+        },
+        {
+          "port": "ALCAIDESA, ES",
+          "arrival_utc": "2026-11-10T17:07:00Z",
+          "departure_utc": "2026-11-13T07:33:00Z"
+        }
+      ],
+      "progress": {
+        "fixes": 0
+      },
+      "arrived_utc": "2026-11-17T09:24:40.446Z"
+    },
+    {
+      "yacht": "SORCERESS",
+      "mmsi": "538071210",
+      "destination": "las-palmas",
+      "fix": {
+        "time_utc": "2026-11-28T08:00:04Z",
+        "lat": 24.6316,
+        "lon": -39.4958,
+        "sog_kn": 10.35,
+        "cog_deg": 194.5,
+        "source": "yb:arc2026",
+        "age_h": 4.1
+      },
+      "to_go_nm": 1309.8,
+      "status": "recording only",
+      "polar": {
+        "fixes": 77,
+        "approach_fixes_skipped": 28,
+        "median_pct": 88,
+        "p25_pct": 76,
+        "p75_pct": 95,
+        "configured_factor_pct": 85,
+        "table": "sw96_sorceress"
+      },
+      "port_calls": [
+        {
+          "port": "GIBRALTAR, GI",
+          "arrival_utc": "2026-11-10T18:04:00Z",
+          "departure_utc": "2026-11-13T16:48:00Z"
+        },
+        {
+          "port": "GIBRALTAR, GI",
+          "arrival_utc": "2026-11-09T07:55:00Z",
+          "departure_utc": "2026-11-10T11:52:00Z"
+        }
+      ],
+      "progress": {
+        "fixes": 17,
+        "sources": {
+          "yb": 17
+        },
+        "windows": {
+          "6h": {
+            "from_utc": "2026-11-28T06:05:38Z",
+            "to_utc": "2026-11-28T08:00:04Z",
+            "hours": 1.9,
+            "sailed_nm": 19.7,
+            "avg_kn": 10.4,
+            "fixes": 1,
+            "made_good_nm": -9.5,
+            "vmg_kn": -5.0,
+            "sog_median_kn": 10.3,
+            "sog_max_kn": 10.3
+          },
+          "24h": {
+            "from_utc": "2026-11-27T12:05:38Z",
+            "to_utc": "2026-11-28T08:00:04Z",
+            "hours": 19.9,
+            "sailed_nm": 214.2,
+            "avg_kn": 10.8,
+            "fixes": 5,
+            "made_good_nm": -185.3,
+            "vmg_kn": -9.3,
+            "sog_median_kn": 10.9,
+            "sog_max_kn": 12.2
+          },
+          "72h": {
+            "from_utc": "2026-11-25T16:00:06Z",
+            "to_utc": "2026-11-28T08:00:04Z",
+            "hours": 64.0,
+            "sailed_nm": 693.5,
+            "avg_kn": 10.8,
+            "fixes": 16,
+            "made_good_nm": -582.4,
+            "vmg_kn": -9.1,
+            "sog_median_kn": 11.4,
+            "sog_max_kn": 13.0
+          }
+        },
+        "daily": [
+          {
+            "day": "2026-11-25",
+            "sailed_nm": 75.8,
+            "hours_covered": 8.0,
+            "avg_kn": 9.5
+          },
+          {
+            "day": "2026-11-26",
+            "sailed_nm": 281.1,
+            "hours_covered": 24.0,
+            "avg_kn": 11.7
+          },
+          {
+            "day": "2026-11-27",
+            "sailed_nm": 258.1,
+            "hours_covered": 24.0,
+            "avg_kn": 10.8
+          },
+          {
+            "day": "2026-11-28",
+            "sailed_nm": 78.4,
+            "hours_covered": 8.0,
+            "avg_kn": 9.8
+          }
+        ],
+        "track": [
+          [
+            "2026-11-25T16:00:06Z",
+            24.7274,
+            -28.412
+          ],
+          [
+            "2026-11-25T20:00:32Z",
+            24.0969,
+            -28.9654
+          ],
+          [
+            "2026-11-26T00:00:28Z",
+            23.9747,
+            -29.4469
+          ],
+          [
+            "2026-11-26T04:00:05Z",
+            24.3521,
+            -29.9583
+          ],
+          [
+            "2026-11-26T08:00:35Z",
+            24.5184,
+            -30.7728
+          ],
+          [
+            "2026-11-26T12:00:30Z",
+            24.7874,
+            -31.6095
+          ],
+          [
+            "2026-11-26T16:00:04Z",
+            24.9349,
+            -32.5464
+          ],
+          [
+            "2026-11-26T20:00:05Z",
+            25.0823,
+            -33.4398
+          ],
+          [
+            "2026-11-27T00:00:00Z",
+            25.303,
+            -34.3222
+          ],
+          [
+            "2026-11-27T04:00:04Z",
+            25.6467,
+            -35.07
+          ],
+          [
+            "2026-11-27T08:00:04Z",
+            25.1809,
+            -35.2887
+          ],
+          [
+            "2026-11-27T12:00:05Z",
+            25.1987,
+            -36.1234
+          ],
+          [
+            "2026-11-27T16:00:04Z",
+            25.1248,
+            -37.0176
+          ],
+          [
+            "2026-11-27T20:00:05Z",
+            25.234,
+            -37.828
+          ],
+          [
+            "2026-11-28T00:00:05Z",
+            25.33,
+            -38.6245
+          ],
+          [
+            "2026-11-28T04:00:05Z",
+            25.2993,
+            -39.3057
+          ],
+          [
+            "2026-11-28T08:00:04Z",
+            24.6316,
+            -39.4958
+          ]
+        ],
+        "to_go_nm": 1309.8,
+        "polar_24h": {
+          "median_pct": 97,
+          "fixes": 5,
+          "table": "sw96_sorceress",
+          "skipped": 0
+        }
+      },
+      "arrived_utc": null
+    },
+    {
+      "yacht": "DAKOTA",
+      "mmsi": "339433000",
+      "destination": "tenerife",
+      "fix": {
+        "time_utc": "2026-11-28T12:00:28Z",
+        "lat": 16.980738,
+        "lon": -61.718435,
+        "sog_kn": 10.8,
+        "cog_deg": 278.2,
+        "source": "aisstream",
+        "age_h": 0.1
+      },
+      "to_go_nm": 2594.7,
+      "status": "recording only",
+      "polar": null,
+      "port_calls": [],
+      "progress": {
+        "fixes": 11,
+        "sources": {
+          "ocr": 7,
+          "aisstream": 4
+        },
+        "windows": {
+          "6h": {
+            "from_utc": "2026-11-28T06:05:38Z",
+            "to_utc": "2026-11-28T12:00:28Z",
+            "hours": 5.9,
+            "sailed_nm": 60.4,
+            "avg_kn": 10.2,
+            "fixes": 6,
+            "made_good_nm": -58.4,
+            "vmg_kn": -9.9,
+            "sog_median_kn": 10.3,
+            "sog_max_kn": 10.8
+          },
+          "24h": {
+            "from_utc": "2026-11-27T19:45:00Z",
+            "to_utc": "2026-11-28T12:00:28Z",
+            "hours": 16.3,
+            "sailed_nm": 165.4,
+            "avg_kn": 10.2,
+            "fixes": 10,
+            "made_good_nm": -159.4,
+            "vmg_kn": -9.8,
+            "sog_median_kn": 10.2,
+            "sog_max_kn": 10.8
+          }
+        },
+        "daily": [
+          {
+            "day": "2026-11-27",
+            "sailed_nm": 42.1,
+            "hours_covered": 4.2,
+            "avg_kn": 9.9
+          },
+          {
+            "day": "2026-11-28",
+            "sailed_nm": 123.2,
+            "hours_covered": 12.0,
+            "avg_kn": 10.3
+          }
+        ],
+        "track": [
+          [
+            "2026-11-27T19:45:00Z",
+            17.4004,
+            -58.8757
+          ],
+          [
+            "2026-11-27T21:46:00Z",
+            17.3965,
+            -59.1998
+          ],
+          [
+            "2026-11-28T00:45:00Z",
+            17.3126,
+            -59.7423
+          ],
+          [
+            "2026-11-28T03:47:00Z",
+            17.2313,
+            -60.2861
+          ],
+          [
+            "2026-11-28T05:08:00Z",
+            17.1828,
+            -60.5127
+          ],
+          [
+            "2026-11-28T07:52:00Z",
+            17.0935,
+            -61.0016
+          ],
+          [
+            "2026-11-28T09:53:00Z",
+            17.0332,
+            -61.3394
+          ],
+          [
+            "2026-11-28T11:03:47Z",
+            16.9917,
+            -61.5572
+          ],
+          [
+            "2026-11-28T11:23:07Z",
+            16.9822,
+            -61.6123
+          ],
+          [
+            "2026-11-28T11:45:47Z",
+            16.9732,
+            -61.6766
+          ],
+          [
+            "2026-11-28T12:00:28Z",
+            16.9807,
+            -61.7184
+          ]
+        ],
+        "to_go_nm": 2594.7
+      },
+      "arrived_utc": null
+    }
+  ],
+  "screenshots_review": [],
+  "model_skill": {
+    "day1": {
+      "aifs": {
+        "checks": 960,
+        "rmse_kn": 1.96,
+        "speed_bias_kn": -0.43
+      },
+      "ecmwf": {
+        "checks": 960,
+        "rmse_kn": 2.64,
+        "speed_bias_kn": 0.12
+      },
+      "gfs": {
+        "checks": 960,
+        "rmse_kn": 3.04,
+        "speed_bias_kn": 0.06
+      },
+      "icon": {
+        "checks": 960,
+        "rmse_kn": 2.95,
+        "speed_bias_kn": -0.02
+      }
+    },
+    "day2": {
+      "aifs": {
+        "checks": 960,
+        "rmse_kn": 2.47,
+        "speed_bias_kn": -0.51
+      },
+      "ecmwf": {
+        "checks": 960,
+        "rmse_kn": 3.33,
+        "speed_bias_kn": 0.03
+      },
+      "gfs": {
+        "checks": 960,
+        "rmse_kn": 3.91,
+        "speed_bias_kn": 0.08
+      },
+      "icon": {
+        "checks": 960,
+        "rmse_kn": 3.81,
+        "speed_bias_kn": -0.1
+      }
+    },
+    "day3": {
+      "aifs": {
+        "checks": 960,
+        "rmse_kn": 3.29,
+        "speed_bias_kn": -0.51
+      },
+      "ecmwf": {
+        "checks": 960,
+        "rmse_kn": 4.27,
+        "speed_bias_kn": 0.01
+      },
+      "gfs": {
+        "checks": 960,
+        "rmse_kn": 4.8,
+        "speed_bias_kn": 0.0
+      },
+      "icon": {
+        "checks": 960,
+        "rmse_kn": 4.65,
+        "speed_bias_kn": -0.21
+      }
+    },
+    "day5": {
+      "aifs": {
+        "checks": 944,
+        "rmse_kn": 5.35,
+        "speed_bias_kn": -0.62
+      },
+      "ecmwf": {
+        "checks": 944,
+        "rmse_kn": 6.74,
+        "speed_bias_kn": -0.04
+      },
+      "gfs": {
+        "checks": 944,
+        "rmse_kn": 7.62,
+        "speed_bias_kn": -0.34
+      },
+      "icon": {
+        "checks": 944,
+        "rmse_kn": 7.72,
+        "speed_bias_kn": -0.35
+      }
+    },
+    "day7": {
+      "aifs": {
+        "checks": 944,
+        "rmse_kn": 7.51,
+        "speed_bias_kn": -1.09
+      },
+      "ecmwf": {
+        "checks": 944,
+        "rmse_kn": 8.56,
+        "speed_bias_kn": -0.4
+      },
+      "gfs": {
+        "checks": 944,
+        "rmse_kn": 10.11,
+        "speed_bias_kn": 0.24
+      }
+    }
+  },
+  "services": {
+    "yb": 173.2,
+    "screenshots": 10.6,
+    "enricher": 1.4,
+    "collector": 0.8
+  },
+  "collector": {
+    "connects_24h": 0,
+    "disconnects_24h": 0,
+    "provider_errors_24h": 0
+  },
+  "weather": {
+    "backlog_reports": 7,
+    "match_rate_7d": 0.987,
+    "api_calls_today": {
+      "historical-forecast-api.open-meteo.com": 8,
+      "api.open-meteo.com": 1540,
+      "marine-api.open-meteo.com": 258,
+      "previous-runs-api.open-meteo.com": 8
+    },
+    "paused": {}
+  }
+}

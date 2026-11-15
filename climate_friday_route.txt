@@ -1,0 +1,3 @@
+ALIBI OF LONDON -> english-harbour: routed from 28.857,-13.817 at 2026-11-20T09:00:00Z (given); oyster885_std x0.85, sail only, 3 min per tack/gybe
+  model    ETA (UTC)          hours sailed nm direct nm avg kn gybes/tacks
+  blend    no_route (grid {'cells': 435, 'fetches': 2175, 'missing': 0, 'res_deg': 2.5, 'step_h': 4.0, 'wind_provider': 'blend', 'models_blended': 4})
