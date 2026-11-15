@@ -1,0 +1,53 @@
+from datetime import datetime, timedelta, timezone
+
+from yachtspeed import skill
+from yachtspeed.db import connect
+from yachtspeed.geo import iso, utcnow
+
+
+def test_weighted_median_equal_is_true_median():
+    t = datetime(2026, 11, 17, tzinfo=timezone.utc)
+    items = [(t + timedelta(hours=h), 0.25) for h in (0, 1, 3, 10)]
+    assert skill.weighted_median_time(items) == t + timedelta(hours=2)
+    items = [(t, 0.1), (t + timedelta(hours=1), 0.1), (t + timedelta(hours=5), 0.8)]
+    assert skill.weighted_median_time(items) == t + timedelta(hours=5)
+
+
+def test_bucket_weights_band_and_fallback():
+    models = ["ecmwf", "aifs", "gfs", "icon"]
+    w = skill._bucket_weights({"ecmwf": (50, 2.0), "aifs": (50, 2.2), "gfs": (50, 6.0), "icon": (50, 3.0)},
+                              models, 12)
+    assert abs(sum(w.values()) - 1) < 1e-9
+    assert all(0.15 - 1e-9 <= x <= 0.35 + 1e-9 for x in w.values())
+    assert w["ecmwf"] > w["icon"] > w["gfs"]
+    eq = skill._bucket_weights({"ecmwf": (3, 2.0)}, models, 12)  # too few checks: equal
+    assert all(abs(x - 0.25) < 1e-9 for x in eq.values())
+
+
+class FakeClient:
+    """Previous-runs API stub: truth 10 kn from 000; gfs is 4 kn too strong, others exact."""
+
+    def _get(self, key, params):
+        day = params["start_date"]
+        times = [f"{day}T{h:02d}:00" for h in range(24)]
+        bias = 4.0 if params["models"].startswith("gfs") else 0.0
+        h = {"time": times, "wind_speed_10m": [10.0] * 24, "wind_direction_10m": [0.0] * 24}
+        for n in (1, 2, 3):
+            h[f"wind_speed_10m_previous_day{n}"] = [10.0 + bias] * 24
+            h[f"wind_direction_10m_previous_day{n}"] = [0.0] * 24
+        return {"hourly": h}
+
+
+def test_verify_day_scores_and_weights(cfg):
+    conn = connect(":memory:")
+    day = (utcnow() - timedelta(days=2)).date().isoformat()
+    for hh in (0, 6, 12, 18):
+        conn.execute("INSERT INTO ais_reports(mmsi, source, bucket_utc, provider_time_utc, ingested_utc, lat, lon) "
+                     "VALUES (?,?,?,?,?,?,?)", (cfg.mmsis[0], "t", f"{day}T{hh:02d}:00:00Z", f"{day}T{hh:02d}:05:00Z",
+                                                 iso(utcnow()), 30.1, -12.0))
+    st = skill.verify_day(conn, FakeClient(), cfg, day)
+    assert st["points"] == 4 and st["checks"] == 4 * 4 * 3
+    sc = skill.scores(conn)
+    assert sc[1]["gfs"][1] > 2.5 and sc[1]["ecmwf"][1] < 1.5
+    w = skill.Weights(conn, ["ecmwf", "aifs", "gfs", "icon"], min_checks=4)
+    assert not w.equal and w.at_lead(30)["gfs"] < 0.25 < w.at_lead(30)["ecmwf"]

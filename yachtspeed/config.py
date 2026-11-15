@@ -65,6 +65,10 @@ class Config:
     report_route_res: float = 1.0
     # MarineTraffic screenshots read on the server by OCR (Dropbox shared-folder link, view-only)
     screenshots_url: str = ""
+    # model weighting from wind verification ([skill]; see yachtspeed/skill.py)
+    skill_weighting: bool = True
+    skill_window_days: int = 30
+    skill_min_checks: int = 12
     # backups
     backup_dir: str = "backups"
     backup_keep: int = 14
@@ -92,7 +96,7 @@ def load_config(path: str | None = None) -> Config:
             raise FileNotFoundError(path)
     cfg = Config()
     fleet = data.pop("yacht", [])
-    for section in ("collector", "weather", "model", "backup", "storage", "report", "screenshots"):
+    for section in ("collector", "weather", "model", "backup", "storage", "report", "screenshots", "skill"):
         data.update(data.pop(section, {}))
     for key, value in data.items():
         if "key" in key.lower() or "token" in key.lower():

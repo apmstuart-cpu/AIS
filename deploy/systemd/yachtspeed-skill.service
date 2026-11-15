@@ -1,0 +1,15 @@
+[Unit]
+Description=yachtspeed: verify the forecast models' past wind forecasts (skill weights)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=yachtspeed
+Group=yachtspeed
+Environment=YACHTSPEED_CONFIG=/etc/yachtspeed/config.toml
+ExecStart=/opt/yachtspeed/.venv/bin/yachtspeed skill
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/yachtspeed

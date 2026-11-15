@@ -75,17 +75,21 @@ def yacht_passage(conn, cfg, client, y, models, max_fix_age_h=24.0, step_nm=10.0
                 rr = {"status": "error", "error": f"{type(e).__name__}: {e}"[:160]}
             out["routed"].append({"model": name, **{k: rr.get(k) for k in (
                 "status", "eta_utc", "hours", "sailed_nm", "maneuvers", "hours_beyond_forecast", "error",
-                "course_under_models", "course_eta_median_utc", "course_eta_range_utc")}})
+                "course_under_models", "course_eta_median_utc", "course_eta_range_utc", "model_weights",
+                "weights_equal", "skill_checks")},
+                "track": _thin_track(rr.get("track") or [])})
         for rt in out["routed"]:
-            etas = sorted(parse_iso(e["eta_utc"]) for e in (rt.get("course_under_models") or [])
-                          if e.get("eta_utc"))
-            if rt.get("status") == "ok" and etas:
-                used = [e["model"] for e in rt["course_under_models"] if e.get("eta_utc")]
-                out["eta"] = {"median_utc": iso(_median_time(etas)), "earliest_utc": iso(etas[0]),
-                              "latest_utc": iso(etas[-1]),
-                              "spread_h": round((etas[-1] - etas[0]).total_seconds() / 3600, 1),
-                              "basis": f"routed course (combined weather) sailed under {', '.join(used)}",
-                              "runs": len(etas)}
+            cu = [e for e in (rt.get("course_under_models") or []) if e.get("eta_utc")]
+            if rt.get("status") == "ok" and cu and rt.get("course_eta_median_utc"):
+                lo, hi = rt["course_eta_range_utc"]
+                wts = rt.get("model_weights") or {}
+                how = ("equal weights" if rt.get("weights_equal", True) else
+                       "skill weights " + ", ".join(f"{m} {round(w * 100)}%" for m, w in wts.items()))
+                out["eta"] = {"median_utc": rt["course_eta_median_utc"], "earliest_utc": lo, "latest_utc": hi,
+                              "spread_h": round((parse_iso(hi) - parse_iso(lo)).total_seconds() / 3600, 1),
+                              "basis": f"routed course (combined weather) sailed under "
+                                       f"{', '.join(e['model'] for e in cu)}; {how}",
+                              "weights": wts, "skill_checks": rt.get("skill_checks", 0), "runs": len(cu)}
                 out["status"] = "ok"
                 return out
     # 2) fallback (no polar, or routing failed): straight-line passage under each model
@@ -125,6 +129,18 @@ def yacht_passage(conn, cfg, client, y, models, max_fix_age_h=24.0, step_nm=10.0
         out["status"] = "ok"
     else:
         out["status"] = "no_forecast"
+    return out
+
+
+def _thin_track(track, every_h=1.0):
+    """Hourly points (plus the last) of a routed track, for maps."""
+    out, last = [], None
+    for p in track:
+        t = parse_iso(p["time_utc"])
+        if last is None or (t - last).total_seconds() >= every_h * 3600 - 60 or p is track[-1]:
+            out.append({k: p.get(k) for k in ("time_utc", "lat", "lon", "heading", "sog_kn", "tws_kn",
+                                               "twa_deg", "wind_from_deg")})
+            last = t
     return out
 
 
@@ -175,17 +191,31 @@ def build(conn, cfg, models=None) -> dict:
 
     client = OpenMeteo(Budget(conn, cfg.calls_per_minute, cfg.calls_per_hour, cfg.calls_per_day))
     models = models or DEFAULT_MODELS
+    from . import skill
+    from .speedtable import parse_destination
+
+    now = iso(utcnow())
     yachts = []
     for y in cfg.fleet:
         if not y.mmsi:
             continue
         p = yacht_passage(conn, cfg, client, y, models)
         p["polar"] = polar_evidence(conn, cfg, client, y) if y.forecast else None
+        try:  # option 2: log every ETA, record arrivals, so ETA skill can be measured later
+            skill.log_etas(conn, p, now)
+            if y.destination:
+                p["arrived_utc"] = skill.record_arrival(conn, y.mmsi, y.destination,
+                                                        parse_destination(y.destination)[1], ARRIVED_NM)
+        except Exception as e:  # never let logging break the report
+            p["log_error"] = f"{type(e).__name__}: {e}"[:120]
         yachts.append(p)
+    sc = skill.scores(conn, cfg.skill_window_days)
+    skill_summary = {f"day{n}": {m: {"checks": v[0], "rmse_kn": round(v[1], 2), "speed_bias_kn": round(v[2], 2)}
+                                 for m, v in d.items()} for n, d in sc.items()}
     st = status(conn, cfg)
     from .screenshots import review_list
     return {"generated_utc": iso(utcnow()), "models": models, "yachts": yachts,
-            "screenshots_review": review_list(conn, 24),
+            "screenshots_review": review_list(conn, 24), "model_skill": skill_summary,
             "services": {k: v.get("age_min") for k, v in st["services"].items()},
             "collector": st["collector"], "weather": {k: st["weather"][k] for k in
                                                       ("backlog_reports", "match_rate_7d", "api_calls_today", "paused")}}
@@ -222,11 +252,13 @@ def markdown(rep: dict) -> str:
             lines += [f"Course: {rt['sailed_nm']} nm, {rt['maneuvers']} gybes/tacks (3 min each)"
                       + (f", {rt['hours_beyond_forecast']} h beyond the forecast end"
                          if rt.get("hours_beyond_forecast") else "") + ".", "",
-                      "| Same course in weather of | ETA (UTC) | Hours | Gybes/tacks |", "|---|---|---|---|"]
+                      "| Same course in weather of | ETA (UTC) | Hours | Gybes/tacks | Weight |", "|---|---|---|---|---|"]
+            wts = e.get("weights") or {}
             for c in rt["course_under_models"]:
+                w = f"{round(wts[c['model']] * 100)}%" if c["model"] in wts else "-"
                 lines.append(f"| {c['model']} | {t(c.get('eta_utc'))} | {c.get('hours', '-')} | "
-                             f"{c.get('maneuvers', '-')} |" if c.get("eta_utc") else
-                             f"| {c['model']} | {c.get('status', 'unavailable')} | | |")
+                             f"{c.get('maneuvers', '-')} | {w} |" if c.get("eta_utc") else
+                             f"| {c['model']} | {c.get('status', 'unavailable')} | | | |")
         elif y.get("models"):
             lines += ["| Model (straight line) | ETA (UTC) | Hours | Avg kn | Wind kn (min–max) | Hours ≥10 kn | "
                       "Gybes/tacks (time) |", "|---|---|---|---|---|---|---|"]
@@ -243,6 +275,11 @@ def markdown(rep: dict) -> str:
                          f"(IQR {p['p25_pct']}–{p['p75_pct']}%) over {p['fixes']} fixes; "
                          f"configured {p['configured_factor_pct']}%.")
         lines.append("")
+    ms = rep.get("model_skill") or {}
+    if any(ms.values()):
+        lines.append("Model wind skill (vector error vs consensus analysis, last 30 d): " + "; ".join(
+            f"{d}: " + ", ".join(f"{m} {v['rmse_kn']} kn ({v['checks']})" for m, v in sorted(row.items()))
+            for d, row in ms.items() if row) + "\n")
     rv = rep.get("screenshots_review") or []
     if rv:
         lines.append("Screenshots needing review (last 24 h): " + "; ".join(
@@ -257,4 +294,21 @@ def write(rep: dict, out_dir: str) -> list[str]:
     d.mkdir(parents=True, exist_ok=True)
     (d / "report.json").write_text(json.dumps(rep, indent=2, default=str))
     (d / "report.md").write_text(markdown(rep))
-    return [str(d / "report.json"), str(d / "report.md")]
+    files = [str(d / "report.json"), str(d / "report.md")]
+    from .chart import route_jpeg
+
+    for old in d.glob("route_*.jpg"):
+        old.unlink()
+    for y in rep["yachts"]:
+        try:
+            f = route_jpeg(str(d / f"route_{_slug(y['yacht'])}.jpg"), y)
+        except Exception as e:  # a chart failure never stops the report
+            y["chart_error"] = f"{type(e).__name__}: {e}"[:120]
+            f = None
+        if f:
+            files.append(f)
+    return files
+
+
+def _slug(name):
+    return "".join(c if c.isalnum() else "_" for c in name.lower()).strip("_")

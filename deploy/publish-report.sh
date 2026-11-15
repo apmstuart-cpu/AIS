@@ -18,8 +18,10 @@ if [ ! -d "$WORK/.git" ]; then
   as_owner git init -q "$WORK"
   as_owner git -C "$WORK" remote add origin "$REMOTE"
 fi
+rm -f "$WORK"/route_*.jpg
 install -o "$OWNER" -m 644 "$OUT/report.json" "$OUT/report.md" "$WORK/"
-as_owner git -C "$WORK" add report.json report.md
+for f in "$OUT"/route_*.jpg; do [ -e "$f" ] && install -o "$OWNER" -m 644 "$f" "$WORK/"; done
+as_owner git -C "$WORK" add -A .
 AMEND=""
 as_owner git -C "$WORK" rev-parse -q --verify HEAD >/dev/null && AMEND="--amend"
 # one commit, replaced each hour, so the branch never grows

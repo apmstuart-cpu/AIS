@@ -183,9 +183,10 @@ class BlendGrid:
     vector (so 350 and 010 average to 000). Sea state and current come from the first
     grid (they are the same Open-Meteo marine data for every model)."""
 
-    def __init__(self, grids, names=None):
+    def __init__(self, grids, names=None, weights=None):
         self.grids = grids
         self.names = names or [f"model{i + 1}" for i in range(len(grids))]
+        self.weights = weights  # skill.Weights (or anything with .at(t) -> {name: w}); None = equal
         self.t0 = grids[0].t0
         self.data_end_h = min(getattr(g, "data_end_h", 0.0) for g in grids)
         self.fetches = sum(getattr(g, "fetches", 0) for g in grids)
@@ -193,15 +194,18 @@ class BlendGrid:
         self.lats, self.lons = getattr(grids[0], "lats", []), getattr(grids[0], "lons", [])
 
     def sample(self, lat, lon, t):
-        samples = [g.sample(lat, lon, t) for g in self.grids]
-        samples = [x for x in samples if x and x.get("wind_speed_kn") is not None]
-        if not samples:
+        wmap = self.weights.at(t) if self.weights is not None else {}
+        pairs = [(g.sample(lat, lon, t), wmap.get(n, 1.0)) for g, n in zip(self.grids, self.names)]
+        pairs = [(x, w) for x, w in pairs if x and x.get("wind_speed_kn") is not None and w > 0]
+        if not pairs:
             return None
+        samples = [x for x, _ in pairs]
+        tw = sum(w for _, w in pairs)
         out = {k: v for k, v in samples[0].items() if not k.startswith("wind")}
-        us = [_uv_from(x["wind_speed_kn"], x["wind_dir_from_deg"]) for x in samples]
-        u = sum(a for a, _ in us) / len(us)
-        v = sum(b for _, b in us) / len(us)
-        out["wind_speed_kn"] = sum(x["wind_speed_kn"] for x in samples) / len(samples)
+        us = [(_uv_from(x["wind_speed_kn"], x["wind_dir_from_deg"]), w) for x, w in pairs]
+        u = sum(a * w for (a, _), w in us) / tw
+        v = sum(b * w for (_, b), w in us) / tw
+        out["wind_speed_kn"] = sum(x["wind_speed_kn"] * w for x, w in pairs) / tw
         out["wind_dir_from_deg"] = (math.degrees(math.atan2(-u, -v)) + 360) % 360
         out["models"] = len(samples)
         return out
@@ -396,7 +400,12 @@ def route_yacht(conn, cfg, client, y, start, t0, dest, wind_provider, hours_gues
                 used.append(name.strip())
         if not grids:
             return {"status": "no_forecast", "grid": {"wind_provider": wind_provider}}
-        grid = BlendGrid(grids, used)
+        weights = None
+        if getattr(cfg, "skill_weighting", False):
+            from .skill import Weights
+
+            weights = Weights(conn, used, cfg.skill_window_days, cfg.skill_min_checks)
+        grid = BlendGrid(grids, used, weights)
     else:
         grid = WeatherGrid(conn, client, bbox, t0, t_end, wind_provider, res=res).load()
         grid.hold_beyond_h = max_days * 24.0
@@ -414,13 +423,21 @@ def route_yacht(conn, cfg, client, y, start, t0, dest, wind_provider, hours_gues
             ev = sail_track(_MemberView(g, marine), r["track"], t0, y.speed_table or "cruiser27", y.polar_factor,
                             maneuver_min=kw.get("maneuver_min", 3.0))
             r["course_under_models"].append({"model": name, **ev})
-        etas = sorted(e["eta_utc"] for e in r["course_under_models"] if e.get("eta_utc"))
-        if etas:
-            ts = [parse_iso(e) for e in etas]
-            n = len(ts)
-            mid = ts[n // 2] if n % 2 else ts[n // 2 - 1] + (ts[n // 2] - ts[n // 2 - 1]) / 2
+        from .skill import weighted_median_time
+
+        ok = [e for e in r["course_under_models"] if e.get("eta_utc")]
+        if ok:
+            ts = [parse_iso(e["eta_utc"]) for e in ok]
+            mid0 = sorted(ts)[len(ts) // 2]
+            wts = (grid.weights.over(t0, mid0) if grid.weights is not None
+                   else {e["model"]: 1.0 / len(ok) for e in ok})
+            tot = sum(wts.get(e["model"], 0) for e in ok) or 1.0
+            r["model_weights"] = {e["model"]: round(wts.get(e["model"], 0) / tot, 3) for e in ok}
+            r["weights_equal"] = grid.weights is None or grid.weights.equal
+            r["skill_checks"] = grid.weights.checks if grid.weights is not None else 0
+            mid = weighted_median_time([(t, r["model_weights"][e["model"]]) for t, e in zip(ts, ok)])
             r["course_eta_median_utc"] = iso(mid)
-            r["course_eta_range_utc"] = [etas[0], etas[-1]]
+            r["course_eta_range_utc"] = [iso(min(ts)), iso(max(ts))]
     return r
 
 

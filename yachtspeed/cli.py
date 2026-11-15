@@ -607,6 +607,27 @@ def cmd_route(cfg, a):
                 last = t
 
 
+def cmd_skill(cfg, a):
+    """Option 1: verify each model's past wind forecasts at the fleet's fixes (server, daily)."""
+    from . import skill
+
+    conn = _conn(cfg)
+    if not a.show:
+        for st in skill.run_verification(conn, _client(conn, cfg), cfg, back_days=a.days):
+            print(st)
+    sc = skill.scores(conn, cfg.skill_window_days)
+    from .weather import MODELS
+
+    w = skill.Weights(conn, list(MODELS), cfg.skill_window_days, cfg.skill_min_checks, cfg.skill_weighting)
+    print(f"wind skill, last {cfg.skill_window_days} d (vector error vs consensus analysis):")
+    for n in skill.LEAD_DAYS:
+        row = "  ".join(f"{m} {sc[n][m][1]:.2f} kn/{sc[n][m][0]}" if m in sc[n] else f"{m} -" for m in MODELS)
+        wt = "  ".join(f"{m} {w.by_day[n][m]:.0%}" for m in MODELS)
+        print(f"  day {n}: {row}\n         weights: {wt}")
+    for r in skill.eta_skill(conn):
+        print(f"arrival {r['mmsi']} {r['destination']} {r['arrived_utc']}: ETA mean abs error h (n) {r['mae_h']}")
+
+
 def cmd_screenshots(cfg, a):
     from . import screenshots
 
@@ -831,6 +852,10 @@ def build_parser():
     s.add_argument("--track-every", type=float, default=3.0)
     start_args(s)
     s.set_defaults(fn=cmd_route)
+    s = sub.add_parser("skill", help="verify the models' past wind forecasts; prints skill and blend weights")
+    s.add_argument("--days", type=int, default=14, help="verify up to this many past days not yet done")
+    s.add_argument("--show", action="store_true", help="only print scores and weights (no API calls)")
+    s.set_defaults(fn=cmd_skill)
     s = sub.add_parser("screenshots", help="read new MarineTraffic screenshots (Dropbox folder) by OCR")
     s.add_argument("--review", action="store_true", help="list screenshots that could not be read")
     s.add_argument("--hours", type=int, default=48)
