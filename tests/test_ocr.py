@@ -70,3 +70,12 @@ def test_screenshot_pipeline_stores_dedups_and_flags(conn, cfg, tmp_path, monkey
     assert [x["file"] for x in screenshots.review_list(conn)] == ["c.png"]
     row = conn.execute("SELECT source, sog_kn FROM ais_reports").fetchone()
     assert tuple(row) == ("ocr:marinetraffic", 9.1)
+
+
+def test_parse_absolute_received_time():
+    from yachtspeed.ocr import parse_received_abs
+
+    assert parse_received_abs("Position received: 2026-11-14 00:53 UTC zx)") == \
+        datetime(2026, 11, 14, 0, 53, tzinfo=timezone.utc)
+    assert parse_received_abs("Received: 2026-11-14 00:53 UTC (AIS s") is not None
+    assert parse_received_abs("Position received: 9 minutes ago") is None

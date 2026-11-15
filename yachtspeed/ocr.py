@@ -81,6 +81,18 @@ def parse_ago(text: str):
     return total if found else None
 
 
+def parse_received_abs(text: str):
+    """'Position received: 2026-11-14 00:53 UTC' (shown once a fix is about a day old)."""
+    m = re.search(r"[Rr]eceived:?\s*(\d{4})-(\d{2})-(\d{2})\s+(\d{1,2}):(\d{2})\s*UTC", text)
+    if not m:
+        return None
+    y, mo, d, h, mi = map(int, m.groups())
+    try:
+        return datetime(y, mo, d, h, mi, tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
 def parse_label(text: str):
     """'<NAME> [XX] at 9.1 kn / 241°' -> (name, sog, cog) (any may be None)."""
     t = text.replace("|", " ")
@@ -185,7 +197,10 @@ def read_screenshot(path: str, fleet_names: list[str]) -> OcrFix:
             fx.lat, fx.lon = c
         else:
             fx.notes.append("coordinates not read")
-        if capture and ago is not None:
+        absolute = parse_received_abs(label) or parse_received_abs(full)
+        if absolute is not None:
+            fx.fix_utc = absolute
+        elif capture and ago is not None:
             fx.fix_utc = (capture - ago).replace(second=0, microsecond=0)
         else:
             fx.notes.append("fix time not read" if capture else "no capture time in file name")
