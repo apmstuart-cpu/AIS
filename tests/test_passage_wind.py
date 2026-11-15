@@ -300,3 +300,43 @@ def test_sw96_table_from_certificate():
     assert table_speed(12, 90, "sw96_orc") == pytest.approx(12.87)
     assert table_speed(12, 0, "sw96_orc") == pytest.approx(7.80)  # beat VMG
     assert table_speed(10, 90, "sw96_orc") > table_speed(10, 90, "oyster885gt_orc")  # bigger, faster boat
+
+
+def test_passage_from_old_fix_departs_at_fix_time(conn, cfg, tmp_path, monkeypatch, capsys):
+    from yachtspeed import cli, weather
+    from yachtspeed.ais import Position
+    from yachtspeed.collector import Store
+
+    real_init = weather.OpenMeteo.__init__
+    monkeypatch.setattr(weather.OpenMeteo, "__init__",
+                        lambda self, budget, session=None, timeout=30: real_init(self, budget, FakeSession(
+                            lambda u, p: (200, om_body(p)))))
+    fix_time = (utcnow() - timedelta(hours=16)).replace(second=0, microsecond=0)
+    Store(conn, cfg).store_position(Position("235000001", "csv", None, fix_time, 33.6, -9.0, 10.0, 240.0,
+                                             None, None, None, None), source="csv:test")
+    cfgfile = tmp_path / "c.toml"
+    cfgfile.write_text(f'db_path = "{cfg.db_path}"\n[[yacht]]\nname = "TESTBOAT"\nmmsi = "235000001"\n')
+    cli.main(["--config", str(cfgfile), "--plain-logs", "passage", "--yacht", "TESTBOAT", "--to", "tenerife",
+              "--speed-table", "oyster885gt_orc", "--json", "--no-store"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["departure_utc"] == fix_time.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def test_polar_check_reads_database_by_default(conn, cfg, tmp_path, monkeypatch, capsys):
+    from yachtspeed import cli, weather
+    from yachtspeed.ais import Position
+    from yachtspeed.collector import Store
+
+    real_init = weather.OpenMeteo.__init__
+    monkeypatch.setattr(weather.OpenMeteo, "__init__",
+                        lambda self, budget, session=None, timeout=30: real_init(self, budget, FakeSession(
+                            lambda u, p: (200, om_body(p)))))
+    t = (utcnow() - timedelta(hours=3)).replace(minute=0, second=0, microsecond=0)
+    Store(conn, cfg).store_position(Position("235000001", "csv", None, t, 33.0, -10.0, 8.0, 0.0,
+                                             None, None, None, None), source="csv:test")
+    cfgfile = tmp_path / "c.toml"
+    cfgfile.write_text(f'db_path = "{cfg.db_path}"\n[[yacht]]\nname = "TESTBOAT"\nmmsi = "235000001"\n')
+    monkeypatch.chdir(tmp_path)  # no data/ folder here: must not need the CSV
+    cli.main(["--config", str(cfgfile), "--plain-logs", "polar-check", "--yacht", "TESTBOAT",
+              "--speed-table", "oyster885gt_orc", "--json"])
+    assert json.loads(capsys.readouterr().out)["summary"]["fixes_scored"] == 1

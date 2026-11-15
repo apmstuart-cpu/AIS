@@ -191,9 +191,11 @@ def _start_point(conn, a, mmsi):
 
 
 def _depart(a, at):
+    """Departure for a passage: --depart if given, else the time of the start fix, so a
+    passage from an older fix is projected forward from when the yacht was actually there."""
     if a.depart:
         return parse_iso(a.depart)
-    return max(at, utcnow().replace(second=0, microsecond=0)) if a.from_ is None else at
+    return at
 
 
 def cmd_passage(cfg, a):
@@ -462,12 +464,21 @@ def cmd_polar_check(cfg, a):
     table = a.speed_table or (y.speed_table if y and y.speed_table else "cruiser27")
     client = _client(conn, cfg)
     rows = []
-    with open(a.csv, newline="") as f:
-        fixes = [r for r in csv.DictReader(f) if r["mmsi"].strip() == mmsi]
+    if a.csv:
+        with open(a.csv, newline="") as f:
+            fixes = [r for r in csv.DictReader(f) if r["mmsi"].strip() == mmsi]
+    else:  # every stored report: AIS, imported screenshot fixes, rally tracker
+        fixes = [{"timestamp_utc": r["provider_time_utc"], "lat": r["lat"], "lon": r["lon"], "sog_kn": r["sog_kn"],
+                  "cog_deg": r["cog_deg"], "source": r["source"]}
+                 for r in conn.execute("SELECT provider_time_utc, lat, lon, sog_kn, cog_deg, source FROM ais_reports "
+                                       "WHERE mmsi=? AND sog_kn IS NOT NULL AND cog_deg IS NOT NULL "
+                                       "ORDER BY provider_time_utc", (mmsi,))]
+        if a.since:
+            fixes = [r for r in fixes if r["timestamp_utc"] >= a.since]
     for r in fixes:
         try:
             sog, cog = float(r["sog_kn"]), float(r["cog_deg"])
-        except (ValueError, KeyError):
+        except (ValueError, KeyError, TypeError):
             continue
         if sog < a.min_sog:
             continue
@@ -662,7 +673,8 @@ def build_parser():
     s.set_defaults(fn=cmd_import_yb)
     s = sub.add_parser("polar-check", help="score recorded fixes against the polar (evidence for polar_factor)")
     s.add_argument("--yacht", required=True)
-    s.add_argument("--csv", default="data/marinetraffic_fixes.csv")
+    s.add_argument("--csv", help="score fixes from this CSV instead of the database")
+    s.add_argument("--since", help="ISO date: only fixes from this time (database mode)")
     s.add_argument("--speed-table")
     s.add_argument("--min-sog", type=float, default=2.0)
     s.add_argument("--json", action="store_true")
