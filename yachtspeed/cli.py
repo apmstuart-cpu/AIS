@@ -232,7 +232,8 @@ def cmd_passage(cfg, a):
                              wind_provider=a.wind_provider, store=not a.no_store, speed_table=table,
                              motor_below_kn=a.motor_below, motor_speed_kn=a.motor_speed,
                              polar_factor=a.polar_factor, use_current=not a.no_current,
-                             use_waves=not a.no_waves)
+                             use_waves=not a.no_waves, maneuver_loss_min=a.gybe_loss_min,
+                             maneuver_every_h=a.gybe_every_h)
     except ValueError as e:
         sys.exit(f"cannot forecast passage: {e}")
     r["start"] = src
@@ -251,6 +252,9 @@ def cmd_passage(cfg, a):
           + (f"; speed table {table} x{a.polar_factor:g}" if table else "")
           + ("; current ignored" if a.no_current else "; incl. along-course current")
           + ("; waves ignored" if a.no_waves else "; incl. sea state (wave angle: 0 = head seas)"))
+    if r.get("maneuvers"):
+        print(f"tacks/gybes: ~{r['maneuvers']:.0f} (every {a.gybe_every_h:g} h when needed, {a.gybe_loss_min:g} min each "
+              f"= {r['maneuver_hours'] * 60:.0f} min); hours by mode {r['hours_by_sail_mode']}")
     last = None
     for s_ in r["steps"]:
         t = parse_iso(s_["start_utc"])
@@ -281,12 +285,14 @@ def _passage_models(conn, cfg, a, model, mmsi, wps, depart, table):
                                  wind_provider=model_provider(name), store=False, speed_table=table,
                                  motor_below_kn=a.motor_below, motor_speed_kn=a.motor_speed,
                                  polar_factor=a.polar_factor, use_current=not a.no_current,
-                                 use_waves=not a.no_waves)
+                                 use_waves=not a.no_waves, maneuver_loss_min=a.gybe_loss_min,
+                             maneuver_every_h=a.gybe_every_h)
         except ValueError as e:
             rows.append({"model": name, "error": str(e)})
             continue
         winds = [s_["tws_kn"] for s_ in r["steps"] if s_["tws_kn"] is not None]
         rows.append({"model": name, "eta_utc": r["arrival_utc"], "hours": r["duration_hours"],
+                     "gybes": round(r.get("maneuvers", 0)), "gybe_min": round(r.get("maneuver_hours", 0) * 60),
                      "avg_kn": round(r["distance_nm"] / r["duration_hours"], 1),
                      "wind_min_kn": round(min(winds), 1) if winds else None,
                      "wind_max_kn": round(max(winds), 1) if winds else None,
@@ -642,6 +648,9 @@ def build_parser():
     s.add_argument("--polar-factor", type=float, help="scale the speed table, e.g. 0.85 (default: config, else 1)")
     s.add_argument("--no-current", action="store_true", help="ignore ocean current")
     s.add_argument("--no-waves", action="store_true", help="ignore sea state (wave height/direction)")
+    s.add_argument("--gybe-loss-min", type=float, default=3.0, help="minutes lost per gybe/tack (default 3)")
+    s.add_argument("--gybe-every-h", type=float, default=4.0,
+                   help="hours between gybes/tacks when the course needs them (default 4; 0 = ignore)")
     s.add_argument("--motor-below", type=float, help="motor when sailing speed is below this (default: never)")
     s.add_argument("--motor-speed", type=float, help="motoring speed (default: config, else 7)")
     s.add_argument("--no-motor", action="store_true", help="ignore the yacht's configured motoring")

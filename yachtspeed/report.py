@@ -63,6 +63,7 @@ def yacht_passage(conn, cfg, client, y, models, max_fix_age_h=24.0, step_nm=10.0
             continue
         winds = [s["tws_kn"] for s in r["steps"] if s["tws_kn"] is not None]
         rows.append({"model": name, "eta_utc": r["arrival_utc"], "hours": r["duration_hours"],
+                     "gybes": round(r.get("maneuvers", 0)), "gybe_min": round(r.get("maneuver_hours", 0) * 60),
                      "avg_kn": round(r["distance_nm"] / r["duration_hours"], 1),
                      "wind_min_kn": round(min(winds), 1) if winds else None,
                      "wind_max_kn": round(max(winds), 1) if winds else None,
@@ -162,13 +163,15 @@ def markdown(rep: dict) -> str:
             continue
         how = "motoring" if y.get("motoring") else f"{y['speed_table']} x{y['polar_factor']:g}, sail only"
         lines += [f"## {y['yacht']} → {y['destination']} ({how})", "",
-                  "| Model | ETA (UTC) | Hours | Avg kn | Wind kn (min–max) | Hours ≥10 kn |", "|---|---|---|---|---|---|"]
+                  "| Model | ETA (UTC) | Hours | Avg kn | Wind kn (min–max) | Hours ≥10 kn | Gybes/tacks (time) |",
+                  "|---|---|---|---|---|---|---|"]
         for m in y["models"]:
             if "error" in m:
-                lines.append(f"| {m['model']} | unavailable | | | | |")
+                lines.append(f"| {m['model']} | unavailable | | | | | |")
             else:
                 lines.append(f"| {m['model']} | {t(m['eta_utc'])} | {m['hours']} | {m['avg_kn']} | "
-                             f"{m['wind_min_kn']}–{m['wind_max_kn']} | {m['hours_wind_ge_10']} |")
+                             f"{m['wind_min_kn']}–{m['wind_max_kn']} | {m['hours_wind_ge_10']} | "
+                             f"{m.get('gybes', 0)} ({m.get('gybe_min', 0)} min) |")
         p = y.get("polar")
         if p and p.get("fixes"):
             lines.append(f"\nPolar evidence: median **{p['median_pct']}%** of {p['table']} "

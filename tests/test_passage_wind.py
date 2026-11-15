@@ -364,3 +364,22 @@ def test_report_builds_json_and_markdown(conn, cfg, tmp_path, monkeypatch):
     files = report.write(rep, str(tmp_path / "out"))
     md = open(files[1]).read()
     assert "TESTBOAT" in md and "rubicon" in md and "Polar evidence" in md
+
+
+def test_gybing_adds_maneuver_time(conn, cfg):
+    from yachtspeed.speedtable import table_speed_mode
+
+    assert table_speed_mode(12, 175, "oyster885_std")[1] == "gybing"
+    assert table_speed_mode(12, 90, "oyster885_std")[1] == "direct"
+    assert table_speed_mode(12, 20, "oyster885_std")[1] == "tacking"
+    # om_body wind from 270: course 090 is dead downwind -> gybing
+    dep = (utcnow() + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+    wps = [(33.0, -10.0), (33.0, -8.5)]
+    empty = SogModel(cfg, [])
+    no = passage_forecast(conn, cfg, client(conn), empty, "235000001", wps, dep, store=False,
+                          speed_table="oyster885_std", maneuver_every_h=0)
+    yes = passage_forecast(conn, cfg, client(conn), empty, "235000001", wps, dep, store=False,
+                           speed_table="oyster885_std", maneuver_loss_min=4, maneuver_every_h=4)
+    assert yes["maneuvers"] > 0 and set(yes["hours_by_sail_mode"]) == {"gybing"}
+    extra = yes["duration_hours"] - no["duration_hours"]
+    assert extra == pytest.approx(yes["maneuver_hours"], rel=0.05)

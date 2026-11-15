@@ -164,7 +164,11 @@ def _speed_at(t, tws, twa, beat="auto"):
 
 
 def table_speed(tws_kn: float, twa_deg: float, table: str = DEFAULT_TABLE, factor: float = 1.0) -> float:
-    """Progress along the course (kn, through the water) for true wind speed/angle.
+    return table_speed_mode(tws_kn, twa_deg, table, factor)[0]
+
+
+def table_speed_mode(tws_kn: float, twa_deg: float, table: str = DEFAULT_TABLE, factor: float = 1.0):
+    """(progress along the course in kn through the water, mode), mode 'direct' | 'tacking' | 'gybing'.
 
     Inside the beat angle the yacht tacks: progress = VMG_beat / cos(TWA).
     Deeper than the gybe angle it gybes: progress = VMG_run / |cos(TWA)|, or sails the
@@ -175,12 +179,12 @@ def table_speed(tws_kn: float, twa_deg: float, table: str = DEFAULT_TABLE, facto
     b_ang, b_vmg = _beat(t, tws_kn)
     g_ang, g_vmg = _run(t, tws_kn)
     if twa < b_ang:
-        v = b_vmg / math.cos(math.radians(twa))
-    elif twa > g_ang:
-        v = max(_speed_at(t, tws_kn, twa), g_vmg / abs(math.cos(math.radians(twa))))
-    else:
-        v = _speed_at(t, tws_kn, twa)
-    return v * factor
+        return b_vmg / math.cos(math.radians(twa)) * factor, "tacking"
+    if twa > g_ang:
+        direct = _speed_at(t, tws_kn, twa)
+        gybing = g_vmg / abs(math.cos(math.radians(twa)))
+        return (gybing * factor, "gybing") if gybing > direct else (direct * factor, "direct")
+    return _speed_at(t, tws_kn, twa) * factor, "direct"
 
 
 def wave_factor(hs_m, wave_from_deg, course_deg, period_s=None):

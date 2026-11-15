@@ -60,7 +60,8 @@ def point_forecast(conn, cfg, client, model: SogModel, mmsi, lat, lon, when: dat
 def passage_forecast(conn, cfg, client, model: SogModel, mmsi, waypoints, departure: datetime,
                      step_nm=10.0, issue=None, wind_provider=None, store=True, speed_table=None,
                      motor_below_kn=None, motor_speed_kn=None, polar_factor=1.0,
-                     use_current=True, use_waves=True) -> dict:
+                     use_current=True, use_waves=True, maneuver_loss_min=3.0,
+                     maneuver_every_h=4.0) -> dict:
     """Propagate a passage step by step.
 
     Speed per step, in order of preference: the yacht's SOG model; else `speed_table`
@@ -68,7 +69,7 @@ def passage_forecast(conn, cfg, client, model: SogModel, mmsi, waypoints, depart
     If `motor_below_kn` is set, steps slower than that are motored at `motor_speed_kn`.
     Leave it unset for a yacht that cannot motor.
     """
-    from .speedtable import table_speed, wave_factor
+    from .speedtable import table_speed_mode, wave_factor
 
     if len(waypoints) < 2:
         raise ValueError("need at least two waypoints")
@@ -96,9 +97,9 @@ def passage_forecast(conn, cfg, client, model: SogModel, mmsi, waypoints, depart
             elif r.get("n_matches", 0) < 2 * cfg.min_matches:
                 flags.append("thin_support")
             source = "model" if speed else None
-            wave_effect, wave_rel = None, None
+            wave_effect, wave_rel, sail_mode = None, None, None
             if (speed is None or speed <= 0.5) and speed_table and r.get("wind_speed_kn") is not None:
-                stw = table_speed(r["wind_speed_kn"], r["twa_deg"], speed_table, polar_factor)
+                stw, sail_mode = table_speed_mode(r["wind_speed_kn"], r["twa_deg"], speed_table, polar_factor)
                 wf, wave_rel = (wave_factor(r.get("wave_height_m"), r.get("wave_dir_from_deg"), course,
                                             r.get("wave_period_s")) if use_waves else (1.0, None))
                 stw *= wf
@@ -122,9 +123,15 @@ def passage_forecast(conn, cfg, client, model: SogModel, mmsi, waypoints, depart
                 flags.append("becalmed")
             speed = max(speed, 0.3)
             hours = dist / speed
+            # tacks/gybes: VMG already covers the extra distance; add the time each manoeuvre costs
+            maneuvers = 0.0
+            if sail_mode in ("tacking", "gybing") and source == "speed_table" and maneuver_every_h:
+                maneuvers = hours / maneuver_every_h
+                hours += maneuvers * maneuver_loss_min / 60
             steps.append({"idx": idx, "leg": leg, "start_utc": iso(t), "lat": round(mid[0], 4),
                           "lon": round(mid[1], 4), "course_deg": round(course, 1), "distance_nm": round(dist, 2),
                           "speed_kn": round(speed, 2), "speed_source": source, "hours": round(hours, 2),
+                          "sail_mode": sail_mode, "maneuvers": round(maneuvers, 2),
                           "flags": flags,
                           "tws_kn": r.get("wind_speed_kn"), "twa_deg": r.get("twa_deg"),
                           "wave_m": r.get("wave_height_m"), "wave_dir_from_deg": r.get("wave_dir_from_deg"),
@@ -139,6 +146,10 @@ def passage_forecast(conn, cfg, client, model: SogModel, mmsi, waypoints, depart
         "passage_id": pid, "mmsi": mmsi, "departure_utc": iso(departure), "arrival_utc": iso(t),
         "duration_hours": round((t - departure).total_seconds() / 3600, 2), "distance_nm": round(total_nm, 1),
         "steps": steps, "flagged_steps": len(flagged),
+        "maneuvers": round(sum(s["maneuvers"] for s in steps), 1),
+        "maneuver_hours": round(sum(s["maneuvers"] for s in steps) * maneuver_loss_min / 60, 2),
+        "hours_by_sail_mode": {k: round(sum(s["hours"] for s in steps if s["sail_mode"] == k), 1)
+                               for k in {s["sail_mode"] for s in steps if s["sail_mode"]}},
         "hours_by_speed_source": {k: round(sum(s["hours"] for s in steps if s["speed_source"] == k), 1)
                                   for k in {s["speed_source"] for s in steps}},
         "flagged_distance_share": round(sum(s["distance_nm"] for s in flagged) / total_nm, 3) if total_nm else 0,
