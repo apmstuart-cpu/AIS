@@ -163,6 +163,19 @@ def _speed_at(t, tws, twa, beat="auto"):
     return pts[angs[-1]]
 
 
+def boat_speed(tws_kn: float, twa_deg: float, table: str = DEFAULT_TABLE, factor: float = 1.0) -> float:
+    """Raw polar boat speed at a true wind angle (no tacking/gybing VMG), 0 inside the
+    no-go zone (tighter than the optimum beat angle). For the router, which chooses its
+    own headings."""
+    t = TABLES[table]
+    twa = abs(twa_deg)
+    twa = 360 - twa if twa > 180 else twa
+    b_ang, _ = _beat(t, tws_kn)
+    if twa < b_ang - 0.5:
+        return 0.0
+    return _speed_at(t, tws_kn, max(twa, b_ang)) * factor
+
+
 def table_speed(tws_kn: float, twa_deg: float, table: str = DEFAULT_TABLE, factor: float = 1.0) -> float:
     return table_speed_mode(tws_kn, twa_deg, table, factor)[0]
 
@@ -233,6 +246,18 @@ DESTINATIONS = {
         "via_if_north_east_of": (29.0, -16.0),
         "via": [(28.62, -16.05)],
     },
+    # Ocean-passage destinations (marina/anchorage approach points; no via points needed by
+    # the router, which avoids land itself; the fixed-line `passage` command goes direct).
+    "rodney-bay": {"name": "Rodney Bay Marina, St Lucia (ARC finish)", "point": (14.083, -60.955), "via": []},
+    "english-harbour": {"name": "English Harbour / Falmouth, Antigua", "point": (17.005, -61.765), "via": []},
+    "bridgetown": {"name": "Port St Charles / Bridgetown, Barbados", "point": (13.100, -59.630), "via": []},
+    "le-marin": {"name": "Le Marin, Martinique", "point": (14.455, -60.875), "via": []},
+    "mindelo": {"name": "Mindelo, Sao Vicente, Cape Verde (ARC+ stop)", "point": (16.887, -24.995), "via": []},
+    "horta": {"name": "Horta, Faial, Azores", "point": (38.530, -28.625), "via": []},
+    "gibraltar": {"name": "Gibraltar / La Linea", "point": (36.150, -5.365), "via": []},
+    "palma": {"name": "Palma de Mallorca", "point": (39.565, 2.635), "via": []},
+    "funchal": {"name": "Funchal, Madeira", "point": (32.645, -16.905), "via": []},
+    "marina-lanzarote": {"name": "Marina Lanzarote, Arrecife", "point": (28.955, -13.545), "via": []},
     "las-palmas": {
         "name": "Muelle Deportivo, Las Palmas de Gran Canaria",
         "point": (28.130, -15.418),
@@ -242,7 +267,20 @@ DESTINATIONS = {
 }
 
 
+def parse_destination(to: str):
+    """A named destination or 'LAT,LON'. Returns (key_or_label, (lat, lon))."""
+    if to in DESTINATIONS:
+        return to, DESTINATIONS[to]["point"]
+    try:
+        lat, lon = (float(x) for x in to.split(","))
+        return f"{lat:.3f},{lon:.3f}", (lat, lon)
+    except ValueError:
+        raise KeyError(f"unknown destination {to!r}; use one of {', '.join(sorted(DESTINATIONS))} or LAT,LON")
+
+
 def destination_route(name: str, start_lat: float, start_lon: float) -> list[tuple[float, float]]:
+    if name not in DESTINATIONS:
+        return [parse_destination(name)[1]]
     d = DESTINATIONS[name]
     pts = []
     cond = d.get("via_if_north_east_of")

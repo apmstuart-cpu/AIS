@@ -59,6 +59,9 @@ class Config:
     twa_tol_deg: float = 20.0
     wave_tol_m: float = 0.5
     voyage_gap_hours: float = 6.0
+    # routing in the hourly server report (each model = one gridded forecast download per 6 h)
+    report_route_models: list = field(default_factory=lambda: ["ecmwf"])
+    report_route_res: float = 1.0
     # backups
     backup_dir: str = "backups"
     backup_keep: int = 14
@@ -86,7 +89,7 @@ def load_config(path: str | None = None) -> Config:
             raise FileNotFoundError(path)
     cfg = Config()
     fleet = data.pop("yacht", [])
-    for section in ("collector", "weather", "model", "backup", "storage"):
+    for section in ("collector", "weather", "model", "backup", "storage", "report"):
         data.update(data.pop(section, {}))
     for key, value in data.items():
         if "key" in key.lower() or "token" in key.lower():

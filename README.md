@@ -78,6 +78,19 @@ and time only. SOG and COG are **made good** from the fix at least 10 minutes ea
 (typically 1–6 h offshore), so they read low when the yacht tacks or gybes between fixes.
 Rows carry `source = yb:<race>` and are weather-matched like AIS rows.
 
+## Weather routing (isochrones)
+
+`yachtspeed route --yacht X --to rubicon|LAT,LON [--models ecmwf,aifs,gfs,icon] [--track]`
+finds the fastest track through a gridded forecast using the yacht's polar (raw polar
+speed by true wind angle, no-go zone upwind), sea state, current, and a time loss per
+tack/gybe (default 3 min). It avoids land using Natural Earth (1:50m worldwide, 1:10m for
+the Eastern Atlantic; `yachtspeed fetch-land` downloads 1:10m worldwide). Grid spacing and
+time step scale with the passage (0.5 deg/1 h coastal to 1.5 deg/4 h ocean); beyond the end
+of the forecast the last hour is held and the result says how many hours rely on that.
+`yachtspeed destinations` lists named ports; any LAT,LON works. The hourly server report
+includes a routed ETA (`report_route_models`, default ECMWF only to save API calls).
+Routes are model output for ETAs, not navigational advice.
+
 ## Passage speed when history is thin
 
 With fewer than 8 comparable observations, `passage` uses a generic speed table

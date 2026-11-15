@@ -37,10 +37,14 @@ def yacht_passage(conn, cfg, client, y, models, max_fix_age_h=24.0, step_nm=10.0
     out["fix"] = {"time_utc": iso(fix_t), "lat": last["lat"], "lon": last["lon"], "sog_kn": last["sog_kn"],
                   "cog_deg": last["cog_deg"], "source": last["source"],
                   "age_h": round((utcnow() - fix_t).total_seconds() / 3600, 1)}
-    if not y.destination or y.destination not in DESTINATIONS:
+    from .speedtable import parse_destination
+    try:
+        _, dest = parse_destination(y.destination) if y.destination else (None, None)
+    except KeyError:
+        dest = None
+    if dest is None:
         out["status"] = "no_destination"
         return out
-    dest = DESTINATIONS[y.destination]["point"]
     out["to_go_nm"] = round(haversine_nm(last["lat"], last["lon"], *dest), 1)
     if out["to_go_nm"] <= ARRIVED_NM and (last["sog_kn"] or 0) < 1.5:
         out["status"] = "arrived"
@@ -70,6 +74,20 @@ def yacht_passage(conn, cfg, client, y, models, max_fix_age_h=24.0, step_nm=10.0
                      "hours_wind_ge_10": round(sum(s["hours"] for s in r["steps"]
                                                    if s["tws_kn"] is not None and s["tws_kn"] >= 10), 1),
                      "distance_nm": r["distance_nm"], "speed_sources": r["hours_by_speed_source"]})
+    # isochrone routing (needs a polar); the gridded forecast is cached for 6 h
+    if y.speed_table and cfg.report_route_models:
+        from .router import route_yacht
+
+        out["routed"] = []
+        for name in cfg.report_route_models:
+            try:
+                rr = route_yacht(conn, cfg, client, y, (last["lat"], last["lon"]), fix_t, dest,
+                                 model_provider(name), res=max(cfg.report_route_res, 0.5),
+                                 maneuver_min=3.0)
+            except Exception as e:  # never let routing break the report
+                rr = {"status": "error", "error": f"{type(e).__name__}: {e}"[:160]}
+            out["routed"].append({"model": name, **{k: rr.get(k) for k in (
+                "status", "eta_utc", "hours", "sailed_nm", "maneuvers", "hours_beyond_forecast", "error")}})
     ok = [x for x in rows if "eta_utc" in x]
     out["models"] = rows
     out["speed_table"] = table
@@ -146,8 +164,8 @@ def markdown(rep: dict) -> str:
         return parse_iso(s).strftime("%a %d %b %H:%M") if s else "-"
 
     lines = [f"# Yacht report — generated {t(rep['generated_utc'])} UTC", "",
-             "| Yacht | Latest fix (UTC) | Age | Position | SOG / COG | To | To go | ETA median | Range (spread) |",
-             "|---|---|---|---|---|---|---|---|---|"]
+             "| Yacht | Latest fix (UTC) | Age | Position | SOG / COG | To | To go | ETA median | Range (spread) | Routed ETA |",
+             "|---|---|---|---|---|---|---|---|---|---|"]
     for y in rep["yachts"]:
         f = y.get("fix") or {}
         pos = f"{f['lat']:.3f}, {f['lon']:.3f}" if f else "-"
@@ -155,8 +173,11 @@ def markdown(rep: dict) -> str:
         e = y.get("eta") or {}
         eta = t(e.get("median_utc")) if e else y.get("status", "")
         rng = f"{t(e['earliest_utc'])} – {t(e['latest_utc'])} ({e['spread_h']} h)" if e else ""
+        rt = "; ".join(f"{r['model']} {t(r['eta_utc'])} ({r['maneuvers']} gybes/tacks, {r['sailed_nm']} nm)"
+                       if r.get("status") == "ok" else f"{r['model']} {r.get('status')}"
+                       for r in (y.get("routed") or []))
         lines.append(f"| {y['yacht']} | {t(f.get('time_utc'))} | {f.get('age_h', '-')} h | {pos} | {sc} | "
-                     f"{y.get('destination') or '-'} | {y.get('to_go_nm', '-')} nm | {eta} | {rng} |")
+                     f"{y.get('destination') or '-'} | {y.get('to_go_nm', '-')} nm | {eta} | {rng} | {rt or '-'} |")
     lines.append("")
     for y in rep["yachts"]:
         if not y.get("models"):

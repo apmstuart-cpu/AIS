@@ -382,7 +382,7 @@ def _point_at_hour(conn, client, cfg, clat, clon, hour: datetime, wind_provider)
         cached = lookup(conn, prov, kind, clat, clon, iso(hour))
         # live forecasts change with each model run, so refresh anything fetched >3h ago
         stale = cached is None or (
-            prov == "om_forecast" and hour > utcnow()
+            (prov == "om_forecast" or prov.startswith("om_model:")) and hour > utcnow()
             and cached["fetched_utc"] < iso(utcnow() - timedelta(hours=3))
         )
         if stale:

@@ -206,8 +206,11 @@ def cmd_passage(cfg, a):
     mmsi = _mmsi(cfg, a.yacht)
     model, _ = _model(conn, cfg, mmsi)
     if a.to:
-        if a.to not in DESTINATIONS:
-            sys.exit(f"unknown destination {a.to!r}; known: {', '.join(DESTINATIONS)} (or give waypoints)")
+        from .speedtable import parse_destination
+        try:
+            parse_destination(a.to)
+        except KeyError as e:
+            sys.exit(str(e))
         lat, lon, at, _, _, src = _start_point(conn, a, mmsi)
         wps = [(lat, lon)] + destination_route(a.to, lat, lon) + [tuple(map(float, w.split(","))) for w in a.waypoints]
         depart = _depart(a, at)
@@ -527,6 +530,84 @@ def cmd_polar_check(cfg, a):
           f"{summary['configured_polar_factor']})" if ratios else "  no fixes scored")
 
 
+def cmd_route(cfg, a):
+    """Isochrone-routed ETA (fastest track through the forecast with the yacht's polar)."""
+    from .router import route_yacht
+    from .speedtable import DESTINATIONS
+    from .weather import model_provider
+
+    conn = _conn(cfg)
+    mmsi = _mmsi(cfg, a.yacht)
+    y = next((y for y in cfg.fleet if y.mmsi == mmsi), None)
+    if y is None:
+        sys.exit("yacht not in config")
+    if a.speed_table:
+        y.speed_table = a.speed_table
+    if a.polar_factor is not None:
+        y.polar_factor = a.polar_factor
+    if not y.speed_table:
+        sys.exit("this yacht has no speed_table; the router needs a polar (e.g. --speed-table cruiser27)")
+    from .speedtable import parse_destination
+
+    try:
+        to, dest = parse_destination(a.to or y.destination)
+    except KeyError as e:
+        sys.exit(str(e))
+    lat, lon, at, _, _, src = _start_point(conn, a, mmsi)
+    client = _client(conn, cfg)
+    models = [m.strip() for m in a.models.split(",")] if a.models else [a.provider]
+    results = []
+    for m in models:
+        prov = "metno" if m == "metno" else model_provider(m)
+        r = route_yacht(conn, cfg, client, y, (lat, lon), at, dest, prov, res=a.grid_res,
+                        step_h=a.step_h, heading_step=a.heading_step, maneuver_min=a.gybe_loss_min)
+        if r.get("status") == "ok" and r.get("hours_beyond_forecast", 0) > 0:
+            r["note"] = f"forecast ends {r['forecast_ends_utc']}; last {r['hours_beyond_forecast']} h assume it holds"
+        r["model"] = m
+        results.append(r)
+    if a.json:
+        _print({"yacht": y.name, "to": to, "start": src, "routes": results})
+        return
+    print(f"{y.name} -> {to}: routed from {lat:.3f},{lon:.3f} at {iso(at)} ({src}); "
+          f"{y.speed_table} x{y.polar_factor:g}, sail only, {a.gybe_loss_min:g} min per tack/gybe")
+    print(f"  {'model':8s} {'ETA (UTC)':17s} {'hours':>6s} {'sailed nm':>9s} {'direct nm':>9s} {'avg kn':>6s} {'gybes/tacks':>11s}")
+    for r in results:
+        if r["status"] != "ok":
+            print(f"  {r['model']:8s} {r['status']} (grid {r.get('grid')})")
+            continue
+        print(f"  {r['model']:8s} {parse_iso(r['eta_utc']):%a %d %H:%MZ}   {r['hours']:6.1f} {r['sailed_nm']:9.1f} "
+              f"{r['direct_nm']:9.1f} {r['avg_sog_kn']:6.1f} {r['maneuvers']:11d}"
+              + (f"   ({r['note']})" if r.get("note") else ""))
+    ok = [r for r in results if r["status"] == "ok"]
+    if len(ok) > 1:
+        etas = sorted(parse_iso(r["eta_utc"]) for r in ok)
+        print(f"  spread {etas[0]:%a %d %H:%MZ} to {etas[-1]:%a %d %H:%MZ}; median {etas[len(etas)//2]:%a %d %H:%MZ}")
+    if a.track and ok:
+        r = ok[0]
+        print(f"  track ({r['model']}), every {a.track_every:g} h:")
+        last = None
+        for p in r["track"]:
+            t = parse_iso(p["time_utc"])
+            if last is None or (t - last).total_seconds() >= a.track_every * 3600 - 60 or p is r["track"][-1]:
+                print(f"    {t:%a %d %H:%MZ} {p['lat']:7.3f} {p['lon']:8.3f}  hdg {p['heading'] if p['heading'] is not None else '-':>3}"
+                      f"  wind {p['tws_kn'] if p['tws_kn'] is not None else '-':>4} TWA {p['twa_deg'] if p['twa_deg'] is not None else '-':>3}"
+                      f"  SOG {p['sog_kn'] if p['sog_kn'] is not None else '-'}")
+                last = t
+
+
+def cmd_destinations(cfg, a):
+    from .speedtable import DESTINATIONS
+
+    for k, v in sorted(DESTINATIONS.items()):
+        print(f"  {k:18s} {v['point'][0]:8.3f} {v['point'][1]:9.3f}  {v['name']}")
+
+
+def cmd_fetch_land(cfg, a):
+    from .land import fetch_world_10m
+
+    print(f"saved {fetch_world_10m()} (worldwide 1:10m land; the router now uses it)")
+
+
 def cmd_report(cfg, a):
     from . import report
 
@@ -705,6 +786,25 @@ def build_parser():
     s.add_argument("--min-sog", type=float, default=2.0)
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_polar_check)
+    s = sub.add_parser("route", help="isochrone-routed ETA: fastest track through the forecast using the polar")
+    s.add_argument("--yacht", required=True)
+    s.add_argument("--to", help="named destination (see `yachtspeed destinations`) or LAT,LON "
+                                "(default: the yacht's configured destination)")
+    s.add_argument("--models", help="e.g. ecmwf,aifs,gfs,icon (one route per model)")
+    s.add_argument("--provider", default="ecmwf", help="single model if --models not given; 'metno' for MET Norway")
+    s.add_argument("--speed-table")
+    s.add_argument("--polar-factor", type=float)
+    s.add_argument("--gybe-loss-min", type=float, default=3.0)
+    s.add_argument("--step-h", type=float, help="isochrone time step in hours (default: by passage length)")
+    s.add_argument("--heading-step", type=int, default=5, help="degrees between headings tried")
+    s.add_argument("--grid-res", type=float, help="forecast grid spacing in degrees (default: by passage size)")
+    s.add_argument("--track", action="store_true", help="print the routed track")
+    s.add_argument("--track-every", type=float, default=3.0)
+    start_args(s)
+    s.set_defaults(fn=cmd_route)
+    sub.add_parser("destinations", help="list named destinations").set_defaults(fn=cmd_destinations)
+    sub.add_parser("fetch-land", help="download worldwide 1:10m land for more detailed routing (~10 MB)").set_defaults(
+        fn=cmd_fetch_land)
     s = sub.add_parser("report", help="status + multi-model ETAs + polar evidence (JSON and Markdown)")
     s.add_argument("--out", help="write report.json and report.md to this directory (default: print Markdown)")
     s.add_argument("--models", help="default ecmwf,aifs,gfs,icon")
