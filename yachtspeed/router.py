@@ -67,16 +67,27 @@ class WeatherGrid:
         expected = int(self._hidx(self.t_end)) + 1
         if rows and (len(rows) >= expected * 0.9 or provider == "metno"):
             return rows  # fresh enough (MET Norway is 6-hourly after ~60 h, so fewer rows)
-        try:
-            if provider == "metno":
-                fetched = fetch_metno(self.client, lat, lon)
-            else:
-                fetched = self.client.fetch(provider, kind, lat, lon, start, end)
-            self.fetches += 1
-            store_rows(self.conn, provider, kind, lat, lon, fetched)
-        except (FetchError, QuotaExceeded):
-            self.missing_cells += 1
-            return rows
+        import time as _time
+
+        for attempt in range(3):
+            try:
+                if provider == "metno":
+                    fetched = fetch_metno(self.client, lat, lon)
+                else:
+                    fetched = self.client.fetch(provider, kind, lat, lon, start, end)
+                self.fetches += 1
+                store_rows(self.conn, provider, kind, lat, lon, fetched)
+                break
+            except QuotaExceeded as e:
+                wait = (e.resume_at - utcnow()).total_seconds()
+                if attempt < 2 and 0 <= wait <= 90:  # per-minute budget: wait for the next minute
+                    _time.sleep(wait + 1)
+                    continue
+                self.missing_cells += 1
+                return rows
+            except FetchError:
+                self.missing_cells += 1
+                return rows
         return self.conn.execute(
             "SELECT * FROM weather_cache WHERE provider=? AND kind=? AND cell_lat=? AND cell_lon=? "
             "AND time_utc >= ? AND time_utc <= ? ORDER BY time_utc",

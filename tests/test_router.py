@@ -92,3 +92,25 @@ def test_blend_averages_models_as_vectors():
     assert w["models"] == 2
     r = route(BlendGrid([a, b]), NO_LAND, (31.0, -20.0), T0, (30.0, -20.0), "oyster885_std", 0.85)
     assert r["status"] == "ok"
+
+
+def test_grid_waits_for_per_minute_budget(conn, monkeypatch):
+    from datetime import timedelta as td
+
+    from yachtspeed import router
+    from yachtspeed.weather import QuotaExceeded
+
+    calls = {"n": 0, "slept": 0}
+
+    class C:
+        def fetch(self, *a):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise QuotaExceeded("local m budget", utcnow() + td(seconds=2))
+            return []
+
+    monkeypatch.setattr("time.sleep", lambda s: calls.__setitem__("slept", calls["slept"] + 1))
+    g = router.WeatherGrid(conn, C(), (30, -20, 30, -20), T0, T0 + td(hours=2), "om_model:x", res=0.5,
+                           use_marine=False)
+    g.load()
+    assert calls["n"] == 2 and calls["slept"] == 1 and g.missing_cells == 0

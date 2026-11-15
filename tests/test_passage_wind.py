@@ -351,6 +351,7 @@ def test_report_builds_json_and_markdown(conn, cfg, tmp_path, monkeypatch):
     monkeypatch.setattr(weather.OpenMeteo, "__init__",
                         lambda self, budget, session=None, timeout=30: real_init(self, budget, FakeSession(
                             lambda u, p: (200, om_body(p)))))
+    cfg.calls_per_minute = 100000  # the blend grid makes several hundred (fake) calls
     cfg.fleet[0].destination = "rubicon"
     cfg.fleet[0].speed_table = "oyster885_std"
     cfg.fleet[0].polar_factor = 0.85
