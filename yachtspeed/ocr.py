@@ -170,6 +170,27 @@ def parse_app_time(text: str, year: int):
                     tzinfo=timezone.utc)
 
 
+def _scan_app_coords(img):
+    """The app's coordinate label sits on the map, where a whole-page read misses it: read
+    overlapping strips of the right half at higher magnification until it turns up."""
+    for i in range(16):
+        y0 = 0.30 + i * 0.035
+        c = parse_app_coords(_tess(_prep(img, (0.45, y0, 1.0, min(1.0, y0 + 0.06)), scale=3), psm=6))
+        if c:
+            return c
+    return None
+
+
+def _scan_app_speed(img):
+    """The speed bubble on the app's compass, e.g. '9.1 kn', read in strips across the map."""
+    for i in range(14):
+        y0 = 0.30 + i * 0.03
+        m = re.search(r"\b([0-9]{1,2}[.,][0-9])\s*kn", _tess(_prep(img, (0.3, y0, 0.7, min(1.0, y0 + 0.05)), scale=3), psm=6))
+        if m:
+            return _num(m.group(1))
+    return None
+
+
 def read_screenshot(path: str, fleet_names: list[str]) -> OcrFix:
     from PIL import Image
 
@@ -190,12 +211,14 @@ def read_screenshot(path: str, fleet_names: list[str]) -> OcrFix:
     # app layout ('Data received ... UTC' and N/W coordinates)
     app_t = parse_app_time(full, (capture or datetime.now(timezone.utc)).year)
     app_c = parse_app_coords(full)
+    if app_t and not app_c:
+        app_c = _scan_app_coords(img)
     if app_t and app_c:
         fx.fix_utc, (fx.lat, fx.lon) = app_t, app_c
         c = re.search(r"Course\s*([0-9]{1,3})", full)
         s = re.search(r"([0-9]+[.,][0-9])\s*kn", full)
         fx.cog_deg = float(c.group(1)) if c else None
-        fx.sog_kn = _num(s.group(1)) if s else None
+        fx.sog_kn = _num(s.group(1)) if s else _scan_app_speed(img)
         fx.yacht = fx.yacht or _match_yacht(full, fleet_names)
     else:
         # web layout: hover label in the middle third, coordinate box bottom right
