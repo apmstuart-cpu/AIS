@@ -578,7 +578,8 @@ def cmd_route(cfg, a):
     print(f"  {'model':8s} {'ETA (UTC)':17s} {'hours':>6s} {'sailed nm':>9s} {'direct nm':>9s} {'avg kn':>6s} {'gybes/tacks':>11s}")
     for r in results:
         if r["status"] != "ok":
-            print(f"  {r['model']:8s} {r['status']} (grid {r.get('grid')})")
+            print(f"  {r['model']:8s} {r['status']} (grid {r.get('grid')})"
+                  + (f"\n           reason: {r['error']}" if r.get("error") else ""))
             continue
         print(f"  {r['model']:8s} {parse_iso(r['eta_utc']):%a %d %H:%MZ}   {r['hours']:6.1f} {r['sailed_nm']:9.1f} "
               f"{r['direct_nm']:9.1f} {r['avg_sog_kn']:6.1f} {r['maneuvers']:11d}"

@@ -51,6 +51,7 @@ class WeatherGrid:
         self.marine: dict = {}  # (i, j) -> {hour_index: (hs, wave_u, wave_v, period, cur_u, cur_v)}
         self.fetches = 0
         self.missing_cells = 0
+        self.last_error = None
 
     def _hidx(self, t: datetime) -> float:
         return (t - self.t0).total_seconds() / 3600
@@ -96,9 +97,11 @@ class WeatherGrid:
                     _time.sleep(wait + 1)
                     continue
                 self.missing_cells += 1
+                self.last_error = f"quota: {e}"[:160]
                 return rows
-            except FetchError:
+            except FetchError as e:
                 self.missing_cells += 1
+                self.last_error = str(e)[:160]
                 return rows
         return self.conn.execute(
             "SELECT * FROM weather_cache WHERE provider=? AND kind=? AND cell_lat=? AND cell_lon=? "
@@ -418,7 +421,7 @@ def route_yacht(conn, cfg, client, y, start, t0, dest, wind_provider, hours_gues
         from .weather import model_provider
 
         names = wind_provider.split(":", 1)[1].split(",") if ":" in wind_provider else BLEND_MODELS
-        grids, used = [], []
+        grids, used, errors = [], [], []
         for i, name in enumerate(names):
             g = WeatherGrid(conn, client, bbox, t0, t_end, model_provider(name.strip()), res=res,
                             use_marine=(not grids)).load()
@@ -426,8 +429,10 @@ def route_yacht(conn, cfg, client, y, start, t0, dest, wind_provider, hours_gues
             if g.wind:
                 grids.append(g)
                 used.append(name.strip())
+            errors.append(g.last_error)
         if not grids:
-            return {"status": "no_forecast", "grid": {"wind_provider": wind_provider}}
+            return {"status": "no_forecast", "grid": {"wind_provider": wind_provider},
+                    "error": "; ".join(sorted({e for e in errors if e}))[:300] or None}
         weights = None
         if getattr(cfg, "skill_weighting", False):
             from .skill import Weights
