@@ -108,3 +108,18 @@ def test_forecast_then_history(tmp_path, monkeypatch, cfg):
     assert "With the live forecast" in md and "| gfs |" in md
     pm = out["forecast"]["per_model"]
     assert pm["ecmwf"]["results"][0]["days"] < pm["gfs"]["results"][0]["days"]  # stronger forecast trades
+
+
+def test_sea_from_wind_gives_a_following_sea_gain():
+    from yachtspeed.speedtable import wave_factor
+
+    class G:
+        t0 = None
+
+        def sample(self, lat, lon, t):
+            return {"wind_speed_kn": 20.0, "wind_dir_from_deg": 60.0}
+
+    w = climate.WithSea(G()).sample(20, -40, None)
+    assert 2.3 < w["wave_height_m"] < 2.9 and w["wave_dir_from_deg"] == 60.0
+    assert wave_factor(w["wave_height_m"], w["wave_dir_from_deg"], 240.0, w["wave_period_s"])[0] > 1.0  # running
+    assert wave_factor(w["wave_height_m"], w["wave_dir_from_deg"], 60.0, w["wave_period_s"])[0] < 1.0  # into it

@@ -672,7 +672,7 @@ def cmd_climate_route(cfg, a):
                       wait=not a.no_wait, out_path=str(base) + ".json", name=a.name,
                       forecast_models=[m.strip() for m in a.forecast_models.split(",") if m.strip()],
                       fade=(a.fade_from, a.fade_to), enso_sigma=a.enso_sigma, currents=not a.no_current,
-                      fuel_note=fuel_note, per_model=not a.no_per_model)
+                      fuel_note=fuel_note, per_model=not a.no_per_model, waves=not a.no_waves)
     (_P(str(base) + ".md")).write_text(climate.markdown(out))
     climate.tracks_jpeg(str(base) + ".jpg", out)
     print(climate.markdown(out))
@@ -943,6 +943,7 @@ def build_parser():
     s.add_argument("--fuel-reserve", type=float, default=0.10, help="share of fuel kept in reserve")
     s.add_argument("--no-current", action="store_true", help="leave out the ocean current")
     s.add_argument("--no-per-model", action="store_true", help="skip the runs with each model's own forecast")
+    s.add_argument("--no-waves", action="store_true", help="leave out the sea state (surfing gain, sea losses)")
     s.set_defaults(fn=cmd_climate_route)
     s = sub.add_parser("screenshots", help="read new MarineTraffic screenshots (Dropbox folder) by OCR")
     s.add_argument("--reread-hours", type=float, default=0,

@@ -6,8 +6,10 @@ Runs on the server only. Wind is fetched once per grid cell and year (3-hourly k
 stored permanently, so a run interrupted by the API's daily limit resumes where it stopped.
 
 Ocean current: a mean field for the same calendar window over 2022-2025 (Open-Meteo's marine
-archive starts in 2022), applied to every year. Not modelled: sea state, squalls, crew
-fatigue and breakages.
+archive starts in 2022), applied to every year. Sea state: derived from each hour's wind
+(fully developed sea), so following seas give the router's surfing gain (up to +3 %). Not
+modelled: squalls, crew fatigue and breakages (the caution belongs in reading the result,
+e.g. the 75 % polar run, not inside the model).
 """
 
 from __future__ import annotations
@@ -234,6 +236,35 @@ class WithCurrent:
         return w
 
 
+class WithSea:
+    """Adds a sea state derived from the local wind (fully developed sea, Pierson-Moskowitz):
+    Hs = 0.0246 U10^2 m and peak period 0.785 U10 s (U10 in m/s), from the wind direction.
+    Open-ocean trade-wind seas are mostly wind-made; this lets the router apply its sea-state
+    factor (following seas: up to +3 % surfing gain; head and beam seas: losses) without
+    downloading wave history."""
+
+    def __init__(self, grid):
+        self.g = grid
+        self.t0 = grid.t0
+        self.data_end_h = getattr(grid, "data_end_h", 10 ** 6)
+        self.lats, self.lons = getattr(grid, "lats", []), getattr(grid, "lons", [])
+
+    def sample(self, lat, lon, t):
+        w = self.g.sample(lat, lon, t)
+        if w is None or w.get("wave_height_m") is not None:
+            return w
+        u = w["wind_speed_kn"] * 0.5144
+        w = dict(w)
+        w["wave_height_m"] = min(6.0, 0.0246 * u * u)
+        w["wave_dir_from_deg"] = w["wind_dir_from_deg"]
+        w["wave_period_s"] = max(3.0, 0.785 * u)
+        return w
+
+
+def sea(grid, waves=True):
+    return WithSea(grid) if waves else grid
+
+
 def fetch_currents(conn, client, bbox, res, depart, max_days, years=CURRENT_YEARS):
     """Mean current per cell and year for the passage's calendar window (raises QuotaExceeded)."""
     import math
@@ -293,7 +324,7 @@ def run(conn, cfg, y, start, dest, depart: datetime, deadline: datetime, years, 
         max_days=28, step_h=4.0, heading_step=5, motor_wind_below_kn=None, motor_speed_kn=7.0, motor_max_h=None,
         maneuver_min=3.0, per_day=2500, per_hour=1200, per_minute=120, wait=True, out_path=None,
         name="climate", forecast_models=None, fade=(6.0, 12.0), enso_sigma=1.0, currents=True,
-        current_res=5.0, fuel_note=None, per_model=True) -> dict:
+        current_res=5.0, fuel_note=None, per_model=True, waves=True) -> dict:
     """Route `y` from `start` to `dest` leaving on `depart`'s month/day/time in each of `years`.
     `deadline` is in the same year as `depart`; the same interval is applied to every year."""
     from .land import mask_for_bbox
@@ -313,7 +344,8 @@ def run(conn, cfg, y, start, dest, depart: datetime, deadline: datetime, years, 
                         "motor_max_h": motor_max_h, "fuel": fuel_note,
                         "current": f"mean of {CURRENT_YEARS[0]}-{CURRENT_YEARS[-1]} for these dates" if currents
                         else "not modelled",
-                        "waves": "not modelled"},
+                        "waves": "from the wind (fully developed sea); following seas up to +3 %" if waves
+                        else "not modelled"},
            "results": [], "status": "running", "updated_utc": iso(utcnow())}
     if out_path and Path(out_path).exists():  # resume: keep finished years
         try:
@@ -388,9 +420,9 @@ def run(conn, cfg, y, start, dest, depart: datetime, deadline: datetime, years, 
             save()
             continue
         t_run = time.time()
-        r = route(WithCurrent(grid, field), land, start, d0, dest, y.speed_table or "cruiser27", y.polar_factor,
-                  step_h=step_h, heading_step=heading_step, maneuver_min=maneuver_min, max_hours=max_days * 24,
-                  use_waves=False, use_current=True, motor_wind_below_kn=motor_wind_below_kn,
+        r = route(sea(WithCurrent(grid, field), waves), land, start, d0, dest, y.speed_table or "cruiser27",
+                  y.polar_factor, step_h=step_h, heading_step=heading_step, maneuver_min=maneuver_min,
+                  max_hours=max_days * 24, use_waves=waves, use_current=True, motor_wind_below_kn=motor_wind_below_kn,
                   motor_speed_kn=motor_speed_kn, motor_max_h=motor_max_h)
         if r.get("status") != "ok":
             res_y = {"year": yr, "status": "no_route", "on_time": False}
@@ -414,7 +446,7 @@ def run(conn, cfg, y, start, dest, depart: datetime, deadline: datetime, years, 
         out["forecast"] = run_forecast(conn, cfg, y, start, dest, depart, bbox, res, land, years, allow_h, max_days,
                                        step_h, heading_step, maneuver_min, motor_wind_below_kn, motor_speed_kn,
                                        motor_max_h, forecast_models, fade, save_cb=save, holder=out,
-                                       field=field, per_model=per_model, enso_w=weights)
+                                       field=field, per_model=per_model, enso_w=weights, waves=waves)
     out["status"] = "complete"
     save()
     return out
@@ -422,7 +454,7 @@ def run(conn, cfg, y, start, dest, depart: datetime, deadline: datetime, years, 
 
 def run_forecast(conn, cfg, y, start, dest, depart, bbox, res, land, years, allow_h, max_days, step_h, heading_step,
                  maneuver_min, motor_wind_below_kn, motor_speed_kn, motor_max_h, models, fade,
-                 save_cb=None, holder=None, field=None, per_model=True, enso_w=None) -> dict:
+                 save_cb=None, holder=None, field=None, per_model=True, enso_w=None, waves=True) -> dict:
     """The live forecast (blend of `models`, skill-weighted), handing over between `fade` days after now, to each past
     year's weather for the rest of the passage."""
     from .router import BlendGrid
@@ -470,9 +502,10 @@ def run_forecast(conn, cfg, y, start, dest, depart, bbox, res, land, years, allo
         if len(clim.wind) < 0.9 * len(clim.lats) * len(clim.lons):
             continue
         for m, g in variants[1:]:  # the same past year, after each model's own forecast
-            r = route(WithCurrent(HybridGrid(g, clim, *windows[m], depart - d0), field), land, start, depart, dest,
-                      y.speed_table or "cruiser27", y.polar_factor, step_h=step_h, heading_step=heading_step,
-                      maneuver_min=maneuver_min, max_hours=max_days * 24, use_waves=False, use_current=True,
+            r = route(sea(WithCurrent(HybridGrid(g, clim, *windows[m], depart - d0), field), waves), land, start,
+                      depart, dest, y.speed_table or "cruiser27", y.polar_factor, step_h=step_h,
+                      heading_step=heading_step, maneuver_min=maneuver_min, max_hours=max_days * 24,
+                      use_waves=waves, use_current=True,
                       motor_wind_below_kn=motor_wind_below_kn, motor_speed_kn=motor_speed_kn, motor_max_h=motor_max_h)
             pm = fc["per_model"][m]
             if r.get("status") != "ok":
@@ -482,9 +515,9 @@ def run_forecast(conn, cfg, y, start, dest, depart, bbox, res, land, years, allo
                                       "on_time": r["hours"] <= allow_h, "margin_h": round(allow_h - r["hours"], 1),
                                       "sailed_nm": r["sailed_nm"], "motor_hours": r.get("motor_hours", 0.0)})
             pm["summary"] = summarise(pm["results"], allow_h, enso_w)
-        hg = WithCurrent(HybridGrid(blend, clim, fs, fe, depart - d0), field)
+        hg = sea(WithCurrent(HybridGrid(blend, clim, fs, fe, depart - d0), field), waves)
         r = route(hg, land, start, depart, dest, y.speed_table or "cruiser27", y.polar_factor, step_h=step_h,
-                  heading_step=heading_step, maneuver_min=maneuver_min, max_hours=max_days * 24, use_waves=False,
+                  heading_step=heading_step, maneuver_min=maneuver_min, max_hours=max_days * 24, use_waves=waves,
                   use_current=True, motor_wind_below_kn=motor_wind_below_kn, motor_speed_kn=motor_speed_kn,
                   motor_max_h=motor_max_h)
         if r.get("status") != "ok":
@@ -545,7 +578,8 @@ def markdown(out) -> str:
              f"({out['allowed_days']} days). Polar {st['table']} x{st['polar_factor']}, gybe {st['gybe_min']} min, "
              f"motor at {st['motor_speed_kn']} kn below {st['motor_wind_below_kn']} kn of wind, "
              f"at most {st.get('motor_max_h')} h (fuel{', ' + st['fuel'] if st.get('fuel') else ''}). "
-             f"Current: {st.get('current', 'not modelled')}; waves not modelled. Status: {out['status']}.", ""]
+             f"Current: {st.get('current', 'not modelled')}. Waves: {st.get('waves', 'not modelled')}. "
+             f"Status: {out['status']}.", ""]
     fc = out.get("forecast") or {}
     fs = fc.get("summary") or {}
     if fs.get("years"):
