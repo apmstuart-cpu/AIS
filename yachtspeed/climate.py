@@ -261,7 +261,7 @@ def run(conn, cfg, y, start, dest, depart: datetime, deadline: datetime, years, 
         max_days=28, step_h=4.0, heading_step=5, motor_wind_below_kn=None, motor_speed_kn=7.0, motor_max_h=None,
         maneuver_min=3.0, per_day=2500, per_hour=1200, per_minute=120, wait=True, out_path=None,
         name="climate", forecast_models=None, forecast_days=10.0, enso_sigma=1.0, currents=True,
-        current_res=5.0, fuel_note=None) -> dict:
+        current_res=5.0, fuel_note=None, per_model=True) -> dict:
     """Route `y` from `start` to `dest` leaving on `depart`'s month/day/time in each of `years`.
     `deadline` is in the same year as `depart`; the same interval is applied to every year."""
     from .land import mask_for_bbox
@@ -382,7 +382,7 @@ def run(conn, cfg, y, start, dest, depart: datetime, deadline: datetime, years, 
         out["forecast"] = run_forecast(conn, cfg, y, start, dest, depart, bbox, res, land, years, allow_h, max_days,
                                        step_h, heading_step, maneuver_min, motor_wind_below_kn, motor_speed_kn,
                                        motor_max_h, forecast_models, forecast_days, save_cb=save, holder=out,
-                                       field=field)
+                                       field=field, per_model=per_model, enso_w=weights)
     out["status"] = "complete"
     save()
     return out
@@ -390,7 +390,7 @@ def run(conn, cfg, y, start, dest, depart: datetime, deadline: datetime, years, 
 
 def run_forecast(conn, cfg, y, start, dest, depart, bbox, res, land, years, allow_h, max_days, step_h, heading_step,
                  maneuver_min, motor_wind_below_kn, motor_speed_kn, motor_max_h, models, forecast_days,
-                 save_cb=None, holder=None, field=None) -> dict:
+                 save_cb=None, holder=None, field=None, per_model=True, enso_w=None) -> dict:
     """The live forecast (blend of `models`, skill-weighted) for the first `forecast_days`, then each past
     year's weather for the rest of the passage."""
     from .router import BlendGrid
@@ -423,11 +423,27 @@ def run_forecast(conn, cfg, y, start, dest, depart, bbox, res, land, years, allo
                "forecast_days_of_passage": round(max(0.0, (splice - depart).total_seconds() / 86400), 1)})
     if holder is not None:
         holder["forecast"] = fc
+    variants = [("blend", blend)] + ([(m, g) for m, g in zip(used, grids)] if per_model and len(used) > 1 else [])
+    if len(variants) > 1:
+        fc["per_model"] = {m: {"results": []} for m, _ in variants[1:]}
     for yr in years:
         d0 = depart.replace(year=yr)
         clim = ClimateGrid(conn, yr, bbox, d0, d0 + timedelta(days=max_days), res).load()
         if len(clim.wind) < 0.9 * len(clim.lats) * len(clim.lons):
             continue
+        for m, g in variants[1:]:  # the same past year, after each model's own forecast
+            r = route(WithCurrent(HybridGrid(g, clim, splice, depart - d0), field), land, start, depart, dest,
+                      y.speed_table or "cruiser27", y.polar_factor, step_h=step_h, heading_step=heading_step,
+                      maneuver_min=maneuver_min, max_hours=max_days * 24, use_waves=False, use_current=True,
+                      motor_wind_below_kn=motor_wind_below_kn, motor_speed_kn=motor_speed_kn, motor_max_h=motor_max_h)
+            pm = fc["per_model"][m]
+            if r.get("status") != "ok":
+                pm["results"].append({"year": yr, "status": "no_route", "on_time": False})
+            else:
+                pm["results"].append({"year": yr, "status": "ok", "days": round(r["hours"] / 24, 2),
+                                      "on_time": r["hours"] <= allow_h, "margin_h": round(allow_h - r["hours"], 1),
+                                      "sailed_nm": r["sailed_nm"], "motor_hours": r.get("motor_hours", 0.0)})
+            pm["summary"] = summarise(pm["results"], allow_h, enso_w)
         hg = WithCurrent(HybridGrid(blend, clim, splice, depart - d0), field)
         r = route(hg, land, start, depart, dest, y.speed_table or "cruiser27", y.polar_factor, step_h=step_h,
                   heading_step=heading_step, maneuver_min=maneuver_min, max_hours=max_days * 24, use_waves=False,
@@ -502,6 +518,22 @@ def markdown(out) -> str:
                   f"El Nino-weighted {round(100 * (fs.get('probability_enso_weighted') or 0))}%.** "
                   f"Median {fs['days_median']} days (10-90 %: {fs['days_p10']}-{fs['days_p90']}), "
                   f"{fs['motor_hours_median']} h motoring.", ""]
+        pm = fc.get("per_model") or {}
+        if pm:
+            lines += ["Each model's own forecast, then the same past years (how much the answer depends on "
+                      "which model is right):", "",
+                      "| Forecast | On time | Probability | El Nino-weighted | Median days | 10-90 % days | Median motor h |",
+                      "|---|---|---|---|---|---|---|",
+                      f"| blend | {fs['on_time']}/{fs['years']} | {round(100 * fs['probability'])}% | "
+                      f"{round(100 * (fs.get('probability_enso_weighted') or 0))}% | {fs['days_median']} | "
+                      f"{fs['days_p10']}-{fs['days_p90']} | {fs['motor_hours_median']} |"]
+            for m, v in pm.items():
+                ms = v.get("summary") or {}
+                if ms.get("years"):
+                    lines.append(f"| {m} | {ms['on_time']}/{ms['years']} | {round(100 * ms['probability'])}% | "
+                                 f"{round(100 * (ms.get('probability_enso_weighted') or 0))}% | {ms['days_median']} | "
+                                 f"{ms['days_p10']}-{ms['days_p90']} | {ms['motor_hours_median']} |")
+            lines.append("")
     elif fc.get("status"):
         lines += [f"Live forecast: {fc['status']}.", ""]
     if s.get("years"):

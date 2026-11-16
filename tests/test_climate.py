@@ -77,7 +77,7 @@ def test_forecast_then_history(tmp_path, monkeypatch, cfg):
     def fake_fetch(self, provider, kind, lat, lon, start, end):
         if provider == "om_marine":
             return []
-        trade = 20.0 if provider.startswith("om_model") else 9.5
+        trade = (20.0 if "ecmwf" in provider else 15.0) if provider.startswith("om_model") else 9.5
         t0 = datetime.fromisoformat(start + "T00:00:00+00:00")
         n = int((datetime.fromisoformat(end + "T00:00:00+00:00") - t0).total_seconds() // 3600) + 24
         return [{"time_utc": (t0 + timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M:00Z"), "wind_speed_kn": trade,
@@ -94,9 +94,12 @@ def test_forecast_then_history(tmp_path, monkeypatch, cfg):
     dep = (utcnow() + timedelta(days=2)).replace(minute=0, second=0, microsecond=0)
     out = climate.run(conn, cfg, y, s, d, dep, dep + timedelta(days=16, hours=18), [2021], res=5.0,
                       motor_wind_below_kn=10, motor_speed_kn=8, motor_max_h=60, out_path=str(tmp_path / "f.json"),
-                      forecast_models=["ecmwf"], forecast_days=10)
+                      forecast_models=["ecmwf", "gfs"], forecast_days=10)
     hist = out["results"][0]
     fc = out["forecast"]["results"][0]
     assert out["forecast"]["status"] == "complete" and out["forecast"]["forecast_days_of_passage"] > 7
     assert fc["days"] < hist["days"]  # strong forecast trades for the first 8+ days beat the weak past year
-    assert "With the live forecast" in climate.markdown(out)
+    md = climate.markdown(out)
+    assert "With the live forecast" in md and "| gfs |" in md
+    pm = out["forecast"]["per_model"]
+    assert pm["ecmwf"]["results"][0]["days"] < pm["gfs"]["results"][0]["days"]  # stronger forecast trades
