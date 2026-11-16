@@ -265,6 +265,8 @@ def route(grid: WeatherGrid, land, start, t0: datetime, dest, table, factor=1.0,
     # and on an ocean crossing the pruning sectors are wide by the time they reach the far side, so
     # the finish zone grows with the passage (about one sector's width at the destination)
     finish_nm = max(15.0, 12.0 * step_h, 1.2 * d_total * math.radians(sector_deg))
+    harbour_skip = harbour_nm
+    approach_motor_nm = 30.0  # with an engine, the final miles can be motored if they cannot be sailed
 
     def velocity(node, w, heading):
         twa_signed = ((w["wind_dir_from_deg"] - heading + 540) % 360) - 180
@@ -309,12 +311,18 @@ def route(grid: WeatherGrid, land, start, t0: datetime, dest, table, factor=1.0,
                 continue
             h_dest = initial_bearing(node.lat, node.lon, *dest)
             vel = velocity(node, w, h_dest)
+            if motor_wind_below_kn and d <= approach_motor_nm:
+                # the last miles into harbour: with an engine she motors in if she cannot sail it
+                ms = motor_speed_kn
+                mve, mvn = ms * math.sin(math.radians(h_dest)), ms * math.cos(math.radians(h_dest))
+                if not vel or (vel[0] * math.sin(math.radians(h_dest)) + vel[1] * math.cos(math.radians(h_dest))) < ms:
+                    vel = (mve, mvn, node.side or 1, 0.0, True)
             if vel:
                 ve, vn, side, twa, _mot = vel
                 sog_along = ve * math.sin(math.radians(h_dest)) + vn * math.cos(math.radians(h_dest))
                 pen = maneuver_min / 60 if node.side and side != node.side else 0.0
                 if sog_along > 0.5 and d <= finish_nm and \
-                        land.segment_clear(node.lat, node.lon, *dest, skip_near=[dest, start], skip_nm=harbour_nm):
+                        land.segment_clear(node.lat, node.lon, *dest, skip_near=[dest, start], skip_nm=harbour_skip):
                     arr = node.t + timedelta(hours=d / sog_along + pen)
                     if best is None or arr < best[0]:
                         best = (arr, node, {"heading": h_dest, "sog": sog_along, "side": side, "twa": twa})
@@ -329,7 +337,7 @@ def route(grid: WeatherGrid, land, start, t0: datetime, dest, table, factor=1.0,
                     hours -= maneuver_min / 60
                     man = 1
                 lat, lon = _move(node.lat, node.lon, ve, vn, hours)
-                if not land.segment_clear(node.lat, node.lon, lat, lon, skip_near=[dest, start], skip_nm=harbour_nm):
+                if not land.segment_clear(node.lat, node.lon, lat, lon, skip_near=[dest, start], skip_nm=harbour_skip):
                     continue
                 ds = haversine_nm(s_lat, s_lon, lat, lon)
                 b = initial_bearing(s_lat, s_lon, lat, lon) if ds > 0.01 else brg_sd

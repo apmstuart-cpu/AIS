@@ -163,3 +163,14 @@ def connect_mem():
     from yachtspeed.db import connect
 
     return connect(":memory:")
+
+
+def test_final_upwind_miles_are_motored_when_there_is_an_engine():
+    land = mask_for_bbox((15.0, -64.0, 19.0, -60.0))
+    g = ConstGrid(16, 80.0, T0)  # trade from the east: English Harbour is dead upwind from the west
+    start, dest = (17.05, -62.20), (17.005, -61.765)
+    sail = route(g, land, start, T0, dest, "oyster885_std", 0.85, step_h=1.0, max_hours=24)
+    motor = route(g, land, start, T0, dest, "oyster885_std", 0.85, step_h=1.0, max_hours=24,
+                  motor_wind_below_kn=10, motor_speed_kn=8)
+    assert motor["status"] == "ok" and motor["hours"] < 6
+    assert sail["status"] != "ok" or sail["hours"] > motor["hours"]
