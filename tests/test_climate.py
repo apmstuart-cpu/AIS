@@ -64,10 +64,15 @@ def test_hybrid_grid_uses_forecast_then_past_year():
         def sample(self, lat, lon, t):
             return {"wind_speed_kn": self.v, "t": t}
 
+    class W(G):
+        def sample(self, lat, lon, t):
+            return {"wind_speed_kn": self.v, "wind_dir_from_deg": 60.0, "t": t}
+
     t0 = datetime(2026, 11, 20, tzinfo=timezone.utc)
-    h = climate.HybridGrid(G(15), G(9), t0 + timedelta(days=5), timedelta(days=365 * 6 + 2))
+    h = climate.HybridGrid(W(15), W(9), t0 + timedelta(days=6), t0 + timedelta(days=12), timedelta(days=365 * 6 + 2))
     assert h.sample(20, -30, t0 + timedelta(days=1))["wind_speed_kn"] == 15
-    late = h.sample(20, -30, t0 + timedelta(days=7))
+    assert abs(h.sample(20, -30, t0 + timedelta(days=9))["wind_speed_kn"] - 12.0) < 1e-6  # halfway: half each
+    late = h.sample(20, -30, t0 + timedelta(days=13))
     assert late["wind_speed_kn"] == 9 and late["t"].year == 2020
 
 
@@ -94,10 +99,10 @@ def test_forecast_then_history(tmp_path, monkeypatch, cfg):
     dep = (utcnow() + timedelta(days=2)).replace(minute=0, second=0, microsecond=0)
     out = climate.run(conn, cfg, y, s, d, dep, dep + timedelta(days=16, hours=18), [2021], res=5.0,
                       motor_wind_below_kn=10, motor_speed_kn=8, motor_max_h=60, out_path=str(tmp_path / "f.json"),
-                      forecast_models=["ecmwf", "gfs"], forecast_days=10)
+                      forecast_models=["ecmwf", "gfs"], fade=(6, 12))
     hist = out["results"][0]
     fc = out["forecast"]["results"][0]
-    assert out["forecast"]["status"] == "complete" and out["forecast"]["forecast_days_of_passage"] > 7
+    assert out["forecast"]["status"] == "complete" and out["forecast"]["handover_day"][1] > 9
     assert fc["days"] < hist["days"]  # strong forecast trades for the first 8+ days beat the weak past year
     md = climate.markdown(out)
     assert "With the live forecast" in md and "| gfs |" in md

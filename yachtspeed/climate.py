@@ -100,20 +100,52 @@ def phase(v):
 
 
 class HybridGrid:
-    """The live forecast up to `splice`, then a past year's weather (time-shifted onto this year)."""
+    """The live forecast, handing over gradually to a past year's weather (time-shifted onto this
+    year): forecast only before `fade_start`, history only after `fade_end`, and in between a mix
+    whose history share rises linearly (wind as vectors, speed as a weighted mean). Forecast skill
+    fades with lead time, so the handover should too."""
 
-    def __init__(self, forecast, clim, splice: datetime, shift: timedelta):
-        self.f, self.c, self.splice, self.shift = forecast, clim, splice, shift
+    def __init__(self, forecast, clim, fade_start: datetime, fade_end: datetime, shift: timedelta):
+        self.f, self.c, self.fs, self.fe, self.shift = forecast, clim, fade_start, fade_end, shift
         self.t0 = forecast.t0
         self.data_end_h = 10 ** 6
         self.lats, self.lons = getattr(forecast, "lats", []), getattr(forecast, "lons", [])
 
+    def history_share(self, t):
+        if t <= self.fs:
+            return 0.0
+        if t >= self.fe:
+            return 1.0
+        return (t - self.fs).total_seconds() / (self.fe - self.fs).total_seconds()
+
     def sample(self, lat, lon, t):
-        if t < self.splice:
-            w = self.f.sample(lat, lon, t)
-            if w is not None:
-                return w
-        return self.c.sample(lat, lon, t - self.shift)
+        a = self.history_share(t)
+        f = self.f.sample(lat, lon, t) if a < 1.0 else None
+        if f is None:  # beyond this forecast's range, or fully handed over
+            return self.c.sample(lat, lon, t - self.shift)
+        if a <= 0.0:
+            return f
+        c = self.c.sample(lat, lon, t - self.shift)
+        if c is None:
+            return f
+        out = dict(f)
+        fu = -f["wind_speed_kn"] * math.sin(math.radians(f["wind_dir_from_deg"]))
+        fv = -f["wind_speed_kn"] * math.cos(math.radians(f["wind_dir_from_deg"]))
+        cu = -c["wind_speed_kn"] * math.sin(math.radians(c["wind_dir_from_deg"]))
+        cv = -c["wind_speed_kn"] * math.cos(math.radians(c["wind_dir_from_deg"]))
+        u, v = fu * (1 - a) + cu * a, fv * (1 - a) + cv * a
+        out["wind_speed_kn"] = f["wind_speed_kn"] * (1 - a) + c["wind_speed_kn"] * a
+        out["wind_dir_from_deg"] = (math.degrees(math.atan2(-u, -v)) + 360) % 360
+        return out
+
+
+def fade_window(now, grid, depart, fade_from_days, fade_to_days):
+    """Handover times for one forecast: from now+fade_from to now+fade_to, never beyond the end of
+    that forecast's data (a short-range model hands over earlier)."""
+    end = depart + timedelta(hours=getattr(grid, "data_end_h", 0))
+    fe = min(now + timedelta(days=fade_to_days), end)
+    fs = min(now + timedelta(days=fade_from_days), fe - timedelta(days=1))
+    return fs, fe
 
 
 def cells_for(bbox, res):
@@ -260,7 +292,7 @@ def _thin(track, every_h=6.0):
 def run(conn, cfg, y, start, dest, depart: datetime, deadline: datetime, years, res=2.5, margin=4.0,
         max_days=28, step_h=4.0, heading_step=5, motor_wind_below_kn=None, motor_speed_kn=7.0, motor_max_h=None,
         maneuver_min=3.0, per_day=2500, per_hour=1200, per_minute=120, wait=True, out_path=None,
-        name="climate", forecast_models=None, forecast_days=10.0, enso_sigma=1.0, currents=True,
+        name="climate", forecast_models=None, fade=(6.0, 12.0), enso_sigma=1.0, currents=True,
         current_res=5.0, fuel_note=None, per_model=True) -> dict:
     """Route `y` from `start` to `dest` leaving on `depart`'s month/day/time in each of `years`.
     `deadline` is in the same year as `depart`; the same interval is applied to every year."""
@@ -381,7 +413,7 @@ def run(conn, cfg, y, start, dest, depart: datetime, deadline: datetime, years, 
         save()
         out["forecast"] = run_forecast(conn, cfg, y, start, dest, depart, bbox, res, land, years, allow_h, max_days,
                                        step_h, heading_step, maneuver_min, motor_wind_below_kn, motor_speed_kn,
-                                       motor_max_h, forecast_models, forecast_days, save_cb=save, holder=out,
+                                       motor_max_h, forecast_models, fade, save_cb=save, holder=out,
                                        field=field, per_model=per_model, enso_w=weights)
     out["status"] = "complete"
     save()
@@ -389,9 +421,9 @@ def run(conn, cfg, y, start, dest, depart: datetime, deadline: datetime, years, 
 
 
 def run_forecast(conn, cfg, y, start, dest, depart, bbox, res, land, years, allow_h, max_days, step_h, heading_step,
-                 maneuver_min, motor_wind_below_kn, motor_speed_kn, motor_max_h, models, forecast_days,
+                 maneuver_min, motor_wind_below_kn, motor_speed_kn, motor_max_h, models, fade,
                  save_cb=None, holder=None, field=None, per_model=True, enso_w=None) -> dict:
-    """The live forecast (blend of `models`, skill-weighted) for the first `forecast_days`, then each past
+    """The live forecast (blend of `models`, skill-weighted), handing over between `fade` days after now, to each past
     year's weather for the rest of the passage."""
     from .router import BlendGrid
     from .weather import model_provider
@@ -418,9 +450,15 @@ def run_forecast(conn, cfg, y, start, dest, depart, bbox, res, land, years, allo
 
         weights = Weights(conn, used, cfg.skill_window_days, cfg.skill_min_checks)
     blend = BlendGrid(grids, used, weights)
-    splice = min(now + timedelta(days=forecast_days), depart + timedelta(hours=blend.data_end_h))
-    fc.update({"models_used": used, "splice_utc": iso(splice),
-               "forecast_days_of_passage": round(max(0.0, (splice - depart).total_seconds() / 86400), 1)})
+    blend.data_end_h = max(g.data_end_h for g in grids)  # a member drops out of the blend when its run ends
+    fs, fe = fade_window(now, blend, depart, *fade)
+    windows = {m: fade_window(now, g, depart, *fade) for m, g in zip(used, grids)}
+
+    def day(t):
+        return round(max(0.0, (t - depart).total_seconds() / 86400), 1)
+
+    fc.update({"models_used": used, "handover_utc": [iso(fs), iso(fe)], "handover_day": [day(fs), day(fe)],
+               "model_handover_day": {m: [day(a), day(b)] for m, (a, b) in windows.items()}})
     if holder is not None:
         holder["forecast"] = fc
     variants = [("blend", blend)] + ([(m, g) for m, g in zip(used, grids)] if per_model and len(used) > 1 else [])
@@ -432,7 +470,7 @@ def run_forecast(conn, cfg, y, start, dest, depart, bbox, res, land, years, allo
         if len(clim.wind) < 0.9 * len(clim.lats) * len(clim.lons):
             continue
         for m, g in variants[1:]:  # the same past year, after each model's own forecast
-            r = route(WithCurrent(HybridGrid(g, clim, splice, depart - d0), field), land, start, depart, dest,
+            r = route(WithCurrent(HybridGrid(g, clim, *windows[m], depart - d0), field), land, start, depart, dest,
                       y.speed_table or "cruiser27", y.polar_factor, step_h=step_h, heading_step=heading_step,
                       maneuver_min=maneuver_min, max_hours=max_days * 24, use_waves=False, use_current=True,
                       motor_wind_below_kn=motor_wind_below_kn, motor_speed_kn=motor_speed_kn, motor_max_h=motor_max_h)
@@ -444,7 +482,7 @@ def run_forecast(conn, cfg, y, start, dest, depart, bbox, res, land, years, allo
                                       "on_time": r["hours"] <= allow_h, "margin_h": round(allow_h - r["hours"], 1),
                                       "sailed_nm": r["sailed_nm"], "motor_hours": r.get("motor_hours", 0.0)})
             pm["summary"] = summarise(pm["results"], allow_h, enso_w)
-        hg = WithCurrent(HybridGrid(blend, clim, splice, depart - d0), field)
+        hg = WithCurrent(HybridGrid(blend, clim, fs, fe, depart - d0), field)
         r = route(hg, land, start, depart, dest, y.speed_table or "cruiser27", y.polar_factor, step_h=step_h,
                   heading_step=heading_step, maneuver_min=maneuver_min, max_hours=max_days * 24, use_waves=False,
                   use_current=True, motor_wind_below_kn=motor_wind_below_kn, motor_speed_kn=motor_speed_kn,
@@ -512,8 +550,9 @@ def markdown(out) -> str:
     fs = fc.get("summary") or {}
     if fs.get("years"):
         lines += [f"## With the live forecast (issued {parse_iso(fc['issued_utc']):%d %b %H:%M} UTC)", "",
-                  f"Forecast ({', '.join(fc.get('models_used', []))}, blended) for the first "
-                  f"{fc.get('forecast_days_of_passage')} days of the passage, then each past year's weather.", "",
+                  f"Forecast ({', '.join(fc.get('models_used', []))}, skill-weighted blend) alone to day "
+                  f"{(fc.get('handover_day') or ['?'])[0]} of the passage, handing over gradually to each past "
+                  f"year's weather by day {(fc.get('handover_day') or ['?', '?'])[1]}.", "",
                   f"**On time in {fs['on_time']} of {fs['years']} ({round(100 * fs['probability'])}%); "
                   f"El Nino-weighted {round(100 * (fs.get('probability_enso_weighted') or 0))}%.** "
                   f"Median {fs['days_median']} days (10-90 %: {fs['days_p10']}-{fs['days_p90']}), "

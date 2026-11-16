@@ -664,7 +664,7 @@ def cmd_climate_route(cfg, a):
                       motor_max_h=a.motor_max_h, maneuver_min=a.gybe_loss_min, per_day=a.max_calls_per_day,
                       wait=not a.no_wait, out_path=str(base) + ".json", name=a.name,
                       forecast_models=[m.strip() for m in a.forecast_models.split(",") if m.strip()],
-                      forecast_days=a.forecast_days, enso_sigma=a.enso_sigma, currents=not a.no_current,
+                      fade=(a.fade_from, a.fade_to), enso_sigma=a.enso_sigma, currents=not a.no_current,
                       fuel_note=fuel_note, per_model=not a.no_per_model)
     (_P(str(base) + ".md")).write_text(climate.markdown(out))
     climate.tracks_jpeg(str(base) + ".jpg", out)
@@ -924,7 +924,8 @@ def build_parser():
     s.add_argument("--no-wait", action="store_true", help="stop at the API's daily limit instead of waiting")
     s.add_argument("--forecast-models", default="ecmwf,aifs,gfs,icon",
                    help="live forecast for the first part of the passage ('' = past weather only)")
-    s.add_argument("--forecast-days", type=float, default=10.0, help="trust the forecast this far ahead")
+    s.add_argument("--fade-from", type=float, default=6.0, help="forecast only up to this many days ahead")
+    s.add_argument("--fade-to", type=float, default=12.0, help="history only from this many days ahead")
     s.add_argument("--enso-sigma", type=float, default=1.0, help="El Nino weighting width (ONI units)")
     s.add_argument("--fuel-l", type=float, default=None, help="fuel on board (litres); sets --motor-max-h")
     s.add_argument("--burn-lph", type=float, default=25.0, help="litres per hour when motoring")
