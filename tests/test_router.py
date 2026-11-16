@@ -136,3 +136,30 @@ def test_course_under_other_models():
     h_light = sail_track(light, r["track"], T0, "oyster885_std", 0.85)["hours"]
     h_fresh = sail_track(fresh, r["track"], T0, "oyster885_std", 0.85)["hours"]
     assert h_fresh < r["hours"] < h_light  # the same course is faster in more wind
+
+
+def test_forecast_fetch_never_asks_beyond_16_days():
+    from datetime import timedelta
+
+    from yachtspeed.geo import utcnow
+    from yachtspeed.router import WeatherGrid
+
+    asked = []
+
+    class C:
+        def fetch(self, provider, kind, lat, lon, start, end):
+            asked.append(end)
+            return []
+
+    t0 = utcnow() + timedelta(days=4)
+    g = WeatherGrid(connect_mem(), C(), (20, -30, 21, -29), t0, t0 + timedelta(days=21), "om_model:gfs_seamless",
+                    res=1.0, use_marine=False)
+    g.load()
+    limit = (utcnow() + timedelta(days=16)).strftime("%Y-%m-%d")
+    assert asked and all(e <= limit for e in asked)
+
+
+def connect_mem():
+    from yachtspeed.db import connect
+
+    return connect(":memory:")

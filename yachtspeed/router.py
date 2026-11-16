@@ -55,16 +55,28 @@ class WeatherGrid:
     def _hidx(self, t: datetime) -> float:
         return (t - self.t0).total_seconds() / 3600
 
+    FORECAST_DAYS = 15  # Open-Meteo forecasts reach 16 days ahead; asking beyond that is refused
+
+    def _fetch_end(self, provider):
+        """Live forecasts can only be requested up to ~16 days ahead: fetch what exists and let
+        the router hold the last forecast hour beyond it (`hold_beyond_h`)."""
+        if provider.startswith(("om_model:", "om_forecast", "om_marine")):
+            return min(self.t_end, utcnow() + timedelta(days=self.FORECAST_DAYS))
+        return self.t_end
+
     def _rows(self, provider, kind, lat, lon):
         from .weather import FetchError, QuotaExceeded, fetch_metno, store_rows
 
-        start, end = self.t0.strftime("%Y-%m-%d"), self.t_end.strftime("%Y-%m-%d")
+        t_end = self._fetch_end(provider)
+        if t_end <= self.t0:  # the whole window is beyond the forecast
+            return []
+        start, end = self.t0.strftime("%Y-%m-%d"), t_end.strftime("%Y-%m-%d")
         fresh = iso(utcnow() - timedelta(hours=self.max_age_h))
         rows = self.conn.execute(
             "SELECT * FROM weather_cache WHERE provider=? AND kind=? AND cell_lat=? AND cell_lon=? "
             "AND time_utc >= ? AND time_utc <= ? AND fetched_utc >= ? ORDER BY time_utc",
-            (provider, kind, lat, lon, iso(self.t0), iso(self.t_end + timedelta(hours=1)), fresh)).fetchall()
-        expected = int(self._hidx(self.t_end)) + 1
+            (provider, kind, lat, lon, iso(self.t0), iso(t_end + timedelta(hours=1)), fresh)).fetchall()
+        expected = int(self._hidx(t_end)) + 1
         if rows and (len(rows) >= expected * 0.9 or provider == "metno"):
             return rows  # fresh enough (MET Norway is 6-hourly after ~60 h, so fewer rows)
         import time as _time
