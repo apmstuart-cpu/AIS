@@ -38,6 +38,78 @@ CREATE TABLE IF NOT EXISTS climate_cells (
 """
 
 
+ONI_URL = "https://www.cpc.ncep.noaa.gov/data/indices/oni.ascii.txt"
+
+
+def oni_table(conn=None) -> dict:
+    """NOAA CPC Oceanic Nino Index: {(season, year): anomaly}, e.g. ('OND', 2015): 2.45.
+    Cached in the DB for 7 days."""
+    import requests
+
+    from . import db
+
+    txt = None
+    if conn is not None:
+        cached = db.kv_get(conn, "oni_table")
+        if cached:
+            stamp, body = cached.split("\n", 1)
+            if stamp >= iso(utcnow() - timedelta(days=7)):
+                txt = body
+    if txt is None:
+        r = requests.get(ONI_URL, timeout=60, headers={"User-Agent": "yachtspeed/0.2"})
+        r.raise_for_status()
+        txt = r.text
+        if conn is not None:
+            db.kv_set(conn, "oni_table", iso(utcnow()) + "\n" + txt)
+    out = {}
+    for line in txt.splitlines():
+        p = line.split()
+        if len(p) == 4 and p[1].isdigit():
+            try:
+                out[(p[0], int(p[1]))] = float(p[3])
+            except ValueError:
+                pass
+    return out
+
+
+def enso_weights(oni, years, sigma=1.0, floor=0.1):
+    """Weight each past year by how close its Oct-Dec ONI is to the latest ONI (this year's
+    event): w = max(floor, exp(-(d/sigma)^2 / 2)). Returns (current, {year: (oni, weight)})."""
+    import math
+
+    latest = max(((y, s) for (s, y) in oni), key=lambda k: (k[0], ["DJF", "JFM", "FMA", "MAM", "AMJ", "MJJ",
+                                                                  "JJA", "JAS", "ASO", "SON", "OND", "NDJ"].index(k[1])))
+    cur = oni[(latest[1], latest[0])]
+    w = {}
+    for yr in years:
+        v = oni.get(("OND", yr))
+        w[yr] = (v, 1.0 if v is None else max(floor, math.exp(-((v - cur) / sigma) ** 2 / 2)))
+    return {"season": f"{latest[1]} {latest[0]}", "oni": cur, "sigma": sigma}, w
+
+
+def phase(v):
+    if v is None:
+        return "-"
+    return "El Nino" if v >= 0.5 else ("La Nina" if v <= -0.5 else "neutral")
+
+
+class HybridGrid:
+    """The live forecast up to `splice`, then a past year's weather (time-shifted onto this year)."""
+
+    def __init__(self, forecast, clim, splice: datetime, shift: timedelta):
+        self.f, self.c, self.splice, self.shift = forecast, clim, splice, shift
+        self.t0 = forecast.t0
+        self.data_end_h = 10 ** 6
+        self.lats, self.lons = getattr(forecast, "lats", []), getattr(forecast, "lons", [])
+
+    def sample(self, lat, lon, t):
+        if t < self.splice:
+            w = self.f.sample(lat, lon, t)
+            if w is not None:
+                return w
+        return self.c.sample(lat, lon, t - self.shift)
+
+
 def cells_for(bbox, res):
     lat0, lon0, lat1, lon1 = bbox
     lats = [round(lat0 + i * res, 4) for i in range(int(round((lat1 - lat0) / res)) + 1)]
@@ -104,7 +176,7 @@ def _thin(track, every_h=6.0):
 def run(conn, cfg, y, start, dest, depart: datetime, deadline: datetime, years, res=2.5, margin=4.0,
         max_days=28, step_h=4.0, heading_step=5, motor_wind_below_kn=None, motor_speed_kn=7.0, motor_max_h=None,
         maneuver_min=3.0, per_day=2500, per_hour=1200, per_minute=120, wait=True, out_path=None,
-        name="climate") -> dict:
+        name="climate", forecast_models=None, forecast_days=10.0, enso_sigma=1.0) -> dict:
     """Route `y` from `start` to `dest` leaving on `depart`'s month/day/time in each of `years`.
     `deadline` is in the same year as `depart`; the same interval is applied to every year."""
     from .land import mask_for_bbox
@@ -132,10 +204,20 @@ def run(conn, cfg, y, start, dest, depart: datetime, deadline: datetime, years, 
         except (OSError, ValueError):
             pass
     done_years = {r["year"] for r in out["results"]}
+    try:
+        cur, wts = enso_weights(oni_table(conn), years, sigma=enso_sigma)
+        out["enso"] = {"now": cur, "years": {str(k): {"oni": v[0], "phase": phase(v[0]), "weight": round(v[1], 3)}
+                                             for k, v in wts.items()}}
+    except Exception as e:  # index unavailable: unweighted only
+        out["enso"] = {"error": f"{type(e).__name__}: {e}"[:120]}
+        wts = {}
+    weights = {k: v[1] for k, v in wts.items()}
 
     def save():
         out["updated_utc"] = iso(utcnow())
-        out["summary"] = summarise(out["results"], allow_h)
+        out["summary"] = summarise(out["results"], allow_h, weights)
+        if out.get("forecast"):
+            out["forecast"]["summary"] = summarise(out["forecast"]["results"], allow_h, weights)
         if out_path:  # results so far, so progress is visible in the published report
             Path(out_path).write_text(json.dumps(out, indent=1))
             base = str(out_path)[:-5] if str(out_path).endswith(".json") else str(out_path)
@@ -189,12 +271,78 @@ def run(conn, cfg, y, start, dest, depart: datetime, deadline: datetime, years, 
         out["results"].append(res_y)
         log(logger, logging.INFO, "climate_year", year=yr, days=res_y.get("days"), on_time=res_y.get("on_time"))
         save()
+    if forecast_models:
+        out["status"] = "running the live forecast"
+        save()
+        out["forecast"] = run_forecast(conn, cfg, y, start, dest, depart, bbox, res, land, years, allow_h, max_days,
+                                       step_h, heading_step, maneuver_min, motor_wind_below_kn, motor_speed_kn,
+                                       motor_max_h, forecast_models, forecast_days, save_cb=save, holder=out)
     out["status"] = "complete"
     save()
     return out
 
 
-def summarise(results, allow_h) -> dict:
+def run_forecast(conn, cfg, y, start, dest, depart, bbox, res, land, years, allow_h, max_days, step_h, heading_step,
+                 maneuver_min, motor_wind_below_kn, motor_speed_kn, motor_max_h, models, forecast_days,
+                 save_cb=None, holder=None) -> dict:
+    """The live forecast (blend of `models`, skill-weighted) for the first `forecast_days`, then each past
+    year's weather for the rest of the passage."""
+    from .router import BlendGrid
+    from .weather import model_provider
+
+    now = utcnow()
+    f_end = min(depart + timedelta(days=max_days), now + timedelta(days=15))
+    fc = {"issued_utc": iso(now), "models": list(models), "results": []}
+    if f_end <= depart + timedelta(hours=12):
+        fc["status"] = "departure is beyond the forecast range"
+        return fc
+    client = OpenMeteo(Budget(conn, cfg.calls_per_minute, cfg.calls_per_hour, cfg.calls_per_day))
+    grids, used = [], []
+    for m in models:
+        g = WeatherGrid(conn, client, bbox, depart, f_end, model_provider(m), res=res, use_marine=False).load()
+        if len(g.wind) >= 0.9 * len(g.lats) * len(g.lons):
+            grids.append(g)
+            used.append(m)
+    if not grids:
+        fc["status"] = "forecast unavailable (weather quota or API error)"
+        return fc
+    weights = None
+    if getattr(cfg, "skill_weighting", False):
+        from .skill import Weights
+
+        weights = Weights(conn, used, cfg.skill_window_days, cfg.skill_min_checks)
+    blend = BlendGrid(grids, used, weights)
+    splice = min(now + timedelta(days=forecast_days), depart + timedelta(hours=blend.data_end_h))
+    fc.update({"models_used": used, "splice_utc": iso(splice),
+               "forecast_days_of_passage": round(max(0.0, (splice - depart).total_seconds() / 86400), 1)})
+    if holder is not None:
+        holder["forecast"] = fc
+    for yr in years:
+        d0 = depart.replace(year=yr)
+        clim = ClimateGrid(conn, yr, bbox, d0, d0 + timedelta(days=max_days), res).load()
+        if len(clim.wind) < 0.9 * len(clim.lats) * len(clim.lons):
+            continue
+        hg = HybridGrid(blend, clim, splice, depart - d0)
+        r = route(hg, land, start, depart, dest, y.speed_table or "cruiser27", y.polar_factor, step_h=step_h,
+                  heading_step=heading_step, maneuver_min=maneuver_min, max_hours=max_days * 24, use_waves=False,
+                  use_current=False, motor_wind_below_kn=motor_wind_below_kn, motor_speed_kn=motor_speed_kn,
+                  motor_max_h=motor_max_h)
+        if r.get("status") != "ok":
+            fc["results"].append({"year": yr, "status": "no_route", "on_time": False})
+        else:
+            fc["results"].append({"year": yr, "status": "ok", "eta": r["eta_utc"], "days": round(r["hours"] / 24, 2),
+                                  "on_time": r["hours"] <= allow_h, "margin_h": round(allow_h - r["hours"], 1),
+                                  "sailed_nm": r["sailed_nm"], "avg_kn": r["avg_sog_kn"],
+                                  "motor_hours": r.get("motor_hours", 0.0),
+                                  "southmost_lat": round(min(p["lat"] for p in r["track"]), 1),
+                                  "track": _thin(r["track"])})
+        if save_cb:
+            save_cb()
+    fc["status"] = "complete"
+    return fc
+
+
+def summarise(results, allow_h, weights=None) -> dict:
     ok = [r for r in results if r.get("status") == "ok"]
     counted = [r for r in results if r.get("status") in ("ok", "no_route")]
     if not counted:
@@ -209,7 +357,17 @@ def summarise(results, allow_h) -> dict:
         return round(days[lo] + (days[hi] - days[lo]) * (k - lo), 2)
 
     on = sum(1 for r in counted if r.get("on_time"))
-    return {"years": len(counted), "on_time": on, "probability": round(on / len(counted), 2),
+    extra = {}
+    if weights:
+        w = [(weights.get(r["year"], 1.0), bool(r.get("on_time"))) for r in counted]
+        tw = sum(x for x, _ in w)
+        extra["probability_enso_weighted"] = round(sum(x for x, o in w if o) / tw, 2) if tw else None
+        extra["effective_years"] = round(tw ** 2 / sum(x * x for x, _ in w), 1) if tw else None
+        en = [r for r in counted if weights.get(r["year"], 0) >= 0.2]
+        if en:
+            extra["el_nino_like_years"] = len(en)
+            extra["el_nino_like_on_time"] = sum(1 for r in en if r.get("on_time"))
+    return {**extra, "years": len(counted), "on_time": on, "probability": round(on / len(counted), 2),
             "allowed_days": round(allow_h / 24, 2), "days_median": pct(0.5), "days_p10": pct(0.1),
             "days_p90": pct(0.9), "days_min": days[0] if days else None, "days_max": days[-1] if days else None,
             "motor_hours_median": round(statistics.median(r["motor_hours"] for r in ok), 1) if ok else None,
@@ -219,23 +377,46 @@ def summarise(results, allow_h) -> dict:
 def markdown(out) -> str:
     s = out.get("summary") or {}
     st = out["settings"]
-    lines = [f"# {out['yacht']}: passage odds from past weather", "",
+    en = out.get("enso") or {}
+    ey = en.get("years") or {}
+    now = en.get("now") or {}
+    lines = [f"# {out['yacht']}: passage odds", "",
              f"Leaving {parse_iso(out['depart']):%d %b %H:%M} UTC, deadline {parse_iso(out['deadline']):%d %b %H:%M} UTC "
              f"({out['allowed_days']} days). Polar {st['table']} x{st['polar_factor']}, gybe {st['gybe_min']} min, "
              f"motor at {st['motor_speed_kn']} kn below {st['motor_wind_below_kn']} kn of wind, "
-             f"at most {st.get('motor_max_h')} h (fuel). "
-             f"Current and waves not modelled. Status: {out['status']}.", ""]
+             f"at most {st.get('motor_max_h')} h (fuel). Current and waves not modelled. Status: {out['status']}.", ""]
+    fc = out.get("forecast") or {}
+    fs = fc.get("summary") or {}
+    if fs.get("years"):
+        lines += [f"## With the live forecast (issued {parse_iso(fc['issued_utc']):%d %b %H:%M} UTC)", "",
+                  f"Forecast ({', '.join(fc.get('models_used', []))}, blended) for the first "
+                  f"{fc.get('forecast_days_of_passage')} days of the passage, then each past year's weather.", "",
+                  f"**On time in {fs['on_time']} of {fs['years']} ({round(100 * fs['probability'])}%); "
+                  f"El Nino-weighted {round(100 * (fs.get('probability_enso_weighted') or 0))}%.** "
+                  f"Median {fs['days_median']} days (10-90 %: {fs['days_p10']}-{fs['days_p90']}), "
+                  f"{fs['motor_hours_median']} h motoring.", ""]
+    elif fc.get("status"):
+        lines += [f"Live forecast: {fc['status']}.", ""]
     if s.get("years"):
-        lines += [f"**On time in {s['on_time']} of {s['years']} years ({round(100 * s['probability'])}%).** "
-                  f"Passage time: median {s['days_median']} days (10-90 %: {s['days_p10']}-{s['days_p90']}); "
+        lines += ["## From past weather alone", "",
+                  f"**On time in {s['on_time']} of {s['years']} years ({round(100 * s['probability'])}%).** "
+                  + (f"Weighted to this year's El Nino (ONI {now.get('oni')} in {now.get('season')}): "
+                     f"**{round(100 * (s.get('probability_enso_weighted') or 0))}%** "
+                     f"(about {s.get('effective_years')} years' worth of evidence); in the "
+                     f"{s.get('el_nino_like_years')} El Nino-like years: {s.get('el_nino_like_on_time')} on time. "
+                     if s.get("probability_enso_weighted") is not None else "")
+                  + f"Passage time: median {s['days_median']} days (10-90 %: {s['days_p10']}-{s['days_p90']}); "
                   f"median {s['sailed_nm_median']} nm sailed, {s['motor_hours_median']} h motoring.", "",
-                  "| Year | Arrives (same calendar) | Days | On time | Margin (h) | Sailed nm | Avg kn | Motor h | Median wind kn | Furthest south |",
-                  "|---|---|---|---|---|---|---|---|---|---|"]
+                  "| Year | ENSO (Oct-Dec ONI) | Weight | Arrives | Days | On time | Margin (h) | Sailed nm | Avg kn | Motor h | Median wind kn | Furthest south |",
+                  "|---|---|---|---|---|---|---|---|---|---|---|---|"]
         for r in sorted(out["results"], key=lambda r: r["year"]):
+            e = ey.get(str(r["year"]), {})
+            ens = f"{e.get('phase', '-')} ({e.get('oni')})" if e else "-"
+            wt = e.get("weight", "-")
             if r.get("status") != "ok":
-                lines.append(f"| {r['year']} | {r.get('status')} | | {'no' if r.get('status') == 'no_route' else '-'} | | | | | | |")
+                lines.append(f"| {r['year']} | {ens} | {wt} | {r.get('status')} | | {'no' if r.get('status') == 'no_route' else '-'} | | | | | | |")
                 continue
-            lines.append(f"| {r['year']} | {parse_iso(r['eta']):%a %d %b %H:%M} | {r['days']} | "
+            lines.append(f"| {r['year']} | {ens} | {wt} | {parse_iso(r['eta']):%a %d %b %H:%M} | {r['days']} | "
                          f"{'yes' if r['on_time'] else 'no'} | {r['margin_h']:+} | {r['sailed_nm']} | {r['avg_kn']} | "
                          f"{r['motor_hours']} | {r['wind_median_kn']} | {r['southmost_lat']}N |")
     return "\n".join(lines) + "\n"

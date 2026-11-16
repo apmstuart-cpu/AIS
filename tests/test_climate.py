@@ -20,6 +20,8 @@ def test_climate_run_counts_on_time_years(tmp_path, monkeypatch, cfg):
                  "wind_dir_from_deg": 65.0, "wind_gust_kn": None} for h in range(n)]
 
     monkeypatch.setattr(weather.OpenMeteo, "fetch", fake_fetch)
+    monkeypatch.setattr(climate, "oni_table", lambda conn=None: {("OND", 2020): -1.11, ("OND", 2021): -0.91,
+                                                                  ("ASO", 2026): 2.46})
     conn = connect(":memory:")
     y = Yacht(name="X", mmsi="1", speed_table="oyster885_std", polar_factor=0.85)
     _, s = parse_destination("rubicon")
@@ -31,9 +33,63 @@ def test_climate_run_counts_on_time_years(tmp_path, monkeypatch, cfg):
     res = {r["year"]: r for r in out["results"]}
     assert out["status"] == "complete" and res[2020]["on_time"] and not res[2021]["on_time"]
     assert out["summary"]["probability"] == 0.5 and res[2021]["motor_hours"] <= 64
+    assert out["enso"]["now"]["oni"] == 2.46 and out["enso"]["years"]["2020"]["phase"] == "La Nina"
+    assert out["summary"]["probability_enso_weighted"] is not None
     n_calls = len(calls)
     out2 = climate.run(conn, cfg, y, s, d, dep, by, [2020, 2021], res=5.0, motor_wind_below_kn=10,
                        motor_speed_kn=8, motor_max_h=60, out_path=str(tmp_path / "c.json"), name="t")
     assert len(calls) == n_calls and out2["summary"]["years"] == 2  # resumes from stored data and results
     assert "On time in 1 of 2 years" in climate.markdown(out2)
     assert climate.tracks_jpeg(str(tmp_path / "c.jpg"), out2)
+
+
+def test_enso_weights_favour_similar_years():
+    oni = {("OND", 2015): 2.45, ("OND", 2010): -1.57, ("OND", 2018): 1.04, ("ASO", 2026): 2.46}
+    cur, w = climate.enso_weights(oni, [2010, 2015, 2018])
+    assert cur["oni"] == 2.46 and w[2015][1] > 0.99 and w[2010][1] == 0.1 and 0.3 < w[2018][1] < 0.45
+
+
+def test_hybrid_grid_uses_forecast_then_past_year():
+    from datetime import datetime, timedelta, timezone
+
+    class G:
+        def __init__(self, v):
+            self.v, self.t0, self.lats, self.lons = v, datetime(2026, 11, 20, tzinfo=timezone.utc), [], []
+
+        def sample(self, lat, lon, t):
+            return {"wind_speed_kn": self.v, "t": t}
+
+    t0 = datetime(2026, 11, 20, tzinfo=timezone.utc)
+    h = climate.HybridGrid(G(15), G(9), t0 + timedelta(days=5), timedelta(days=365 * 6 + 2))
+    assert h.sample(20, -30, t0 + timedelta(days=1))["wind_speed_kn"] == 15
+    late = h.sample(20, -30, t0 + timedelta(days=7))
+    assert late["wind_speed_kn"] == 9 and late["t"].year == 2020
+
+
+def test_forecast_then_history(tmp_path, monkeypatch, cfg):
+    from yachtspeed.geo import utcnow
+
+    def fake_fetch(self, provider, kind, lat, lon, start, end):
+        trade = 20.0 if provider.startswith("om_model") else 9.5
+        t0 = datetime.fromisoformat(start + "T00:00:00+00:00")
+        n = int((datetime.fromisoformat(end + "T00:00:00+00:00") - t0).total_seconds() // 3600) + 24
+        return [{"time_utc": (t0 + timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M:00Z"), "wind_speed_kn": trade,
+                 "wind_dir_from_deg": 65.0, "wind_gust_kn": None, "grid_lat": lat, "grid_lon": lon} for h in range(n)]
+
+    monkeypatch.setattr(weather.OpenMeteo, "fetch", fake_fetch)
+    monkeypatch.setattr(climate, "oni_table", lambda conn=None: {("OND", 2021): -0.91, ("ASO", 2026): 2.46})
+    cfg.calls_per_minute = 100000
+    cfg.skill_weighting = False
+    conn = connect(":memory:")
+    y = Yacht(name="X", mmsi="1", speed_table="oyster885_std", polar_factor=0.85)
+    _, s = parse_destination("rubicon")
+    _, d = parse_destination("english-harbour")
+    dep = (utcnow() + timedelta(days=2)).replace(minute=0, second=0, microsecond=0)
+    out = climate.run(conn, cfg, y, s, d, dep, dep + timedelta(days=16, hours=18), [2021], res=5.0,
+                      motor_wind_below_kn=10, motor_speed_kn=8, motor_max_h=60, out_path=str(tmp_path / "f.json"),
+                      forecast_models=["ecmwf"], forecast_days=10)
+    hist = out["results"][0]
+    fc = out["forecast"]["results"][0]
+    assert out["forecast"]["status"] == "complete" and out["forecast"]["forecast_days_of_passage"] > 7
+    assert fc["days"] < hist["days"]  # strong forecast trades for the first 8+ days beat the weak past year
+    assert "With the live forecast" in climate.markdown(out)

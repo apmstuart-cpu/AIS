@@ -654,7 +654,9 @@ def cmd_climate_route(cfg, a):
     out = climate.run(conn, cfg, y, start, dest, depart, deadline, list(range(y0, y1 + 1)), res=a.res,
                       step_h=a.step_h, motor_wind_below_kn=a.motor_below, motor_speed_kn=a.motor_speed,
                       motor_max_h=a.motor_max_h, maneuver_min=a.gybe_loss_min, per_day=a.max_calls_per_day,
-                      wait=not a.no_wait, out_path=str(base) + ".json", name=a.name)
+                      wait=not a.no_wait, out_path=str(base) + ".json", name=a.name,
+                      forecast_models=[m.strip() for m in a.forecast_models.split(",") if m.strip()],
+                      forecast_days=a.forecast_days, enso_sigma=a.enso_sigma)
     (_P(str(base) + ".md")).write_text(climate.markdown(out))
     climate.tracks_jpeg(str(base) + ".jpg", out)
     print(climate.markdown(out))
@@ -911,6 +913,10 @@ def build_parser():
     s.add_argument("--name", default="passage")
     s.add_argument("--out-dir", default="/var/lib/yachtspeed/report")
     s.add_argument("--no-wait", action="store_true", help="stop at the API's daily limit instead of waiting")
+    s.add_argument("--forecast-models", default="ecmwf,aifs,gfs,icon",
+                   help="live forecast for the first part of the passage ('' = past weather only)")
+    s.add_argument("--forecast-days", type=float, default=10.0, help="trust the forecast this far ahead")
+    s.add_argument("--enso-sigma", type=float, default=1.0, help="El Nino weighting width (ONI units)")
     s.set_defaults(fn=cmd_climate_route)
     s = sub.add_parser("screenshots", help="read new MarineTraffic screenshots (Dropbox folder) by OCR")
     s.add_argument("--reread-hours", type=float, default=0,
