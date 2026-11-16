@@ -5,14 +5,16 @@ in time. The standard way to plan beyond the 10-16 day forecast range.
 Runs on the server only. Wind is fetched once per grid cell and year (3-hourly kept) and
 stored permanently, so a run interrupted by the API's daily limit resumes where it stopped.
 
-Not modelled: ocean current (the westgoing North Equatorial Current helps ~0.3-0.5 kn, so
-the result is slightly pessimistic), sea state, squalls, crew fatigue and breakages.
+Ocean current: a mean field for the same calendar window over 2022-2025 (Open-Meteo's marine
+archive starts in 2022), applied to every year. Not modelled: sea state, squalls, crew
+fatigue and breakages.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import math
 import statistics
 import time
 from datetime import datetime, timedelta, timezone
@@ -30,6 +32,10 @@ CREATE TABLE IF NOT EXISTS climate_wind (
     year INTEGER NOT NULL, cell_lat REAL NOT NULL, cell_lon REAL NOT NULL, time_utc TEXT NOT NULL,
     wind_speed_kn REAL, wind_dir_from_deg REAL,
     PRIMARY KEY (year, cell_lat, cell_lon, time_utc)
+);
+CREATE TABLE IF NOT EXISTS climate_current (
+    year INTEGER NOT NULL, cell_lat REAL NOT NULL, cell_lon REAL NOT NULL, start_md TEXT NOT NULL,
+    u_sum REAL, v_sum REAL, n INTEGER, PRIMARY KEY (year, cell_lat, cell_lon, start_md)
 );
 CREATE TABLE IF NOT EXISTS climate_cells (
     year INTEGER NOT NULL, cell_lat REAL NOT NULL, cell_lon REAL NOT NULL, start_date TEXT, end_date TEXT,
@@ -148,6 +154,84 @@ def fetch_year(conn, client, year, cells, start_date, end_date, thin_h=3, progre
     return n
 
 
+CURRENT_YEARS = (2022, 2023, 2024, 2025)  # Open-Meteo's marine archive has currents from mid-2022
+
+
+class CurrentField:
+    """Mean surface current (knots, east/north components) over the same calendar window in
+    several recent years, on a coarse grid; currents on ocean passages are steady and large-scale."""
+
+    def __init__(self, conn, bbox, res, start_md):
+        self.lat0, self.lon0 = bbox[0], bbox[1]
+        self.res = res
+        self.uv = {}
+        for r in conn.execute("SELECT cell_lat, cell_lon, sum(u_sum), sum(v_sum), sum(n) FROM climate_current "
+                              "WHERE start_md=? GROUP BY cell_lat, cell_lon", (start_md,)):
+            if r[4]:
+                self.uv[(round(r[0], 4), round(r[1], 4))] = (r[2] / r[4], r[3] / r[4])
+
+    def at(self, lat, lon):
+        fi, fj = (lat - self.lat0) / self.res, (lon - self.lon0) / self.res
+        i0, j0 = int(fi // 1), int(fj // 1)
+        di, dj = fi - i0, fj - j0
+        acc_u = acc_v = ws = 0.0
+        for (i, j), w in (((i0, j0), (1 - di) * (1 - dj)), ((i0 + 1, j0), di * (1 - dj)),
+                          ((i0, j0 + 1), (1 - di) * dj), ((i0 + 1, j0 + 1), di * dj)):
+            k = (round(self.lat0 + i * self.res, 4), round(self.lon0 + j * self.res, 4))
+            if k in self.uv and w > 0:
+                acc_u += w * self.uv[k][0]
+                acc_v += w * self.uv[k][1]
+                ws += w
+        return (acc_u / ws, acc_v / ws) if ws > 0 else (0.0, 0.0)
+
+
+class WithCurrent:
+    """Adds the mean current to whatever wind grid it wraps."""
+
+    def __init__(self, grid, field):
+        self.g, self.field = grid, field
+        self.t0 = grid.t0
+        self.data_end_h = getattr(grid, "data_end_h", 10 ** 6)
+        self.lats, self.lons = getattr(grid, "lats", []), getattr(grid, "lons", [])
+
+    def sample(self, lat, lon, t):
+        w = self.g.sample(lat, lon, t)
+        if w is not None and self.field is not None and self.field.uv:
+            w = dict(w)
+            w["current_u"], w["current_v"] = self.field.at(lat, lon)
+        return w
+
+
+def fetch_currents(conn, client, bbox, res, depart, max_days, years=CURRENT_YEARS):
+    """Mean current per cell and year for the passage's calendar window (raises QuotaExceeded)."""
+    import math
+
+    conn.executescript(SQL)
+    md = depart.strftime("%m-%d")
+    done = {(r[0], round(r[1], 4), round(r[2], 4)) for r in conn.execute(
+        "SELECT year, cell_lat, cell_lon FROM climate_current WHERE start_md=?", (md,))}
+    for yr in years:
+        d0 = depart.replace(year=yr)
+        s_date, e_date = d0.strftime("%Y-%m-%d"), (d0 + timedelta(days=max_days)).strftime("%Y-%m-%d")
+        for la, lo in cells_for(bbox, res):
+            if (yr, la, lo) in done:
+                continue
+            try:
+                rows = client.fetch("om_marine", "marine", la, lo, s_date, e_date)
+            except FetchError:
+                rows = []
+            u = v = 0.0
+            n = 0
+            for r in rows:
+                spd, d = r.get("current_speed_kn"), r.get("current_dir_to_deg")
+                if spd is None or d is None:
+                    continue
+                u += spd * math.sin(math.radians(d))
+                v += spd * math.cos(math.radians(d))
+                n += 1
+            conn.execute("INSERT OR REPLACE INTO climate_current VALUES (?,?,?,?,?,?,?)", (yr, la, lo, md, u, v, n))
+
+
 class ClimateGrid(WeatherGrid):
     """A WeatherGrid read from the stored ERA5 wind of one past year (no fetching, no sea state)."""
 
@@ -176,7 +260,8 @@ def _thin(track, every_h=6.0):
 def run(conn, cfg, y, start, dest, depart: datetime, deadline: datetime, years, res=2.5, margin=4.0,
         max_days=28, step_h=4.0, heading_step=5, motor_wind_below_kn=None, motor_speed_kn=7.0, motor_max_h=None,
         maneuver_min=3.0, per_day=2500, per_hour=1200, per_minute=120, wait=True, out_path=None,
-        name="climate", forecast_models=None, forecast_days=10.0, enso_sigma=1.0) -> dict:
+        name="climate", forecast_models=None, forecast_days=10.0, enso_sigma=1.0, currents=True,
+        current_res=5.0, fuel_note=None) -> dict:
     """Route `y` from `start` to `dest` leaving on `depart`'s month/day/time in each of `years`.
     `deadline` is in the same year as `depart`; the same interval is applied to every year."""
     from .land import mask_for_bbox
@@ -193,8 +278,10 @@ def run(conn, cfg, y, start, dest, depart: datetime, deadline: datetime, years, 
            "grid": {"bbox": bbox, "res_deg": res, "cells": len(cells), "step_h": step_h},
            "settings": {"table": y.speed_table, "polar_factor": y.polar_factor, "gybe_min": maneuver_min,
                         "motor_wind_below_kn": motor_wind_below_kn, "motor_speed_kn": motor_speed_kn,
-                        "motor_max_h": motor_max_h,
-                        "current": "not modelled", "waves": "not modelled"},
+                        "motor_max_h": motor_max_h, "fuel": fuel_note,
+                        "current": f"mean of {CURRENT_YEARS[0]}-{CURRENT_YEARS[-1]} for these dates" if currents
+                        else "not modelled",
+                        "waves": "not modelled"},
            "results": [], "status": "running", "updated_utc": iso(utcnow())}
     if out_path and Path(out_path).exists():  # resume: keep finished years
         try:
@@ -212,6 +299,24 @@ def run(conn, cfg, y, start, dest, depart: datetime, deadline: datetime, years, 
         out["enso"] = {"error": f"{type(e).__name__}: {e}"[:120]}
         wts = {}
     weights = {k: v[1] for k, v in wts.items()}
+    field = None
+    if currents:
+        cbbox = (math.floor(bbox[0] / current_res) * current_res, math.floor(bbox[1] / current_res) * current_res,
+                 math.ceil(bbox[2] / current_res) * current_res, math.ceil(bbox[3] / current_res) * current_res)
+        while True:
+            try:
+                fetch_currents(conn, client, cbbox, current_res, depart, max_days)
+                break
+            except QuotaExceeded as e:
+                pause = (e.resume_at - utcnow()).total_seconds()
+                out["status"] = f"waiting for weather quota until {iso(e.resume_at)} (currents)"
+                if out_path:
+                    Path(out_path).write_text(json.dumps(out, indent=1))
+                if not wait or pause > 26 * 3600:
+                    return out
+                time.sleep(max(5.0, pause + 5))
+        field = CurrentField(conn, cbbox, current_res, depart.strftime("%m-%d"))
+        out["current_cells"] = len(field.uv)
 
     def save():
         out["updated_utc"] = iso(utcnow())
@@ -251,9 +356,9 @@ def run(conn, cfg, y, start, dest, depart: datetime, deadline: datetime, years, 
             save()
             continue
         t_run = time.time()
-        r = route(grid, land, start, d0, dest, y.speed_table or "cruiser27", y.polar_factor, step_h=step_h,
-                  heading_step=heading_step, maneuver_min=maneuver_min, max_hours=max_days * 24,
-                  use_waves=False, use_current=False, motor_wind_below_kn=motor_wind_below_kn,
+        r = route(WithCurrent(grid, field), land, start, d0, dest, y.speed_table or "cruiser27", y.polar_factor,
+                  step_h=step_h, heading_step=heading_step, maneuver_min=maneuver_min, max_hours=max_days * 24,
+                  use_waves=False, use_current=True, motor_wind_below_kn=motor_wind_below_kn,
                   motor_speed_kn=motor_speed_kn, motor_max_h=motor_max_h)
         if r.get("status") != "ok":
             res_y = {"year": yr, "status": "no_route", "on_time": False}
@@ -276,7 +381,8 @@ def run(conn, cfg, y, start, dest, depart: datetime, deadline: datetime, years, 
         save()
         out["forecast"] = run_forecast(conn, cfg, y, start, dest, depart, bbox, res, land, years, allow_h, max_days,
                                        step_h, heading_step, maneuver_min, motor_wind_below_kn, motor_speed_kn,
-                                       motor_max_h, forecast_models, forecast_days, save_cb=save, holder=out)
+                                       motor_max_h, forecast_models, forecast_days, save_cb=save, holder=out,
+                                       field=field)
     out["status"] = "complete"
     save()
     return out
@@ -284,7 +390,7 @@ def run(conn, cfg, y, start, dest, depart: datetime, deadline: datetime, years, 
 
 def run_forecast(conn, cfg, y, start, dest, depart, bbox, res, land, years, allow_h, max_days, step_h, heading_step,
                  maneuver_min, motor_wind_below_kn, motor_speed_kn, motor_max_h, models, forecast_days,
-                 save_cb=None, holder=None) -> dict:
+                 save_cb=None, holder=None, field=None) -> dict:
     """The live forecast (blend of `models`, skill-weighted) for the first `forecast_days`, then each past
     year's weather for the rest of the passage."""
     from .router import BlendGrid
@@ -322,10 +428,10 @@ def run_forecast(conn, cfg, y, start, dest, depart, bbox, res, land, years, allo
         clim = ClimateGrid(conn, yr, bbox, d0, d0 + timedelta(days=max_days), res).load()
         if len(clim.wind) < 0.9 * len(clim.lats) * len(clim.lons):
             continue
-        hg = HybridGrid(blend, clim, splice, depart - d0)
+        hg = WithCurrent(HybridGrid(blend, clim, splice, depart - d0), field)
         r = route(hg, land, start, depart, dest, y.speed_table or "cruiser27", y.polar_factor, step_h=step_h,
                   heading_step=heading_step, maneuver_min=maneuver_min, max_hours=max_days * 24, use_waves=False,
-                  use_current=False, motor_wind_below_kn=motor_wind_below_kn, motor_speed_kn=motor_speed_kn,
+                  use_current=True, motor_wind_below_kn=motor_wind_below_kn, motor_speed_kn=motor_speed_kn,
                   motor_max_h=motor_max_h)
         if r.get("status") != "ok":
             fc["results"].append({"year": yr, "status": "no_route", "on_time": False})
@@ -384,7 +490,8 @@ def markdown(out) -> str:
              f"Leaving {parse_iso(out['depart']):%d %b %H:%M} UTC, deadline {parse_iso(out['deadline']):%d %b %H:%M} UTC "
              f"({out['allowed_days']} days). Polar {st['table']} x{st['polar_factor']}, gybe {st['gybe_min']} min, "
              f"motor at {st['motor_speed_kn']} kn below {st['motor_wind_below_kn']} kn of wind, "
-             f"at most {st.get('motor_max_h')} h (fuel). Current and waves not modelled. Status: {out['status']}.", ""]
+             f"at most {st.get('motor_max_h')} h (fuel{', ' + st['fuel'] if st.get('fuel') else ''}). "
+             f"Current: {st.get('current', 'not modelled')}; waves not modelled. Status: {out['status']}.", ""]
     fc = out.get("forecast") or {}
     fs = fc.get("summary") or {}
     if fs.get("years"):

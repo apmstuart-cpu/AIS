@@ -10,10 +10,12 @@ def test_climate_run_counts_on_time_years(tmp_path, monkeypatch, cfg):
     calls = []
 
     def fake_fetch(self, provider, kind, lat, lon, start, end):
+        if provider == "om_marine":  # a steady westgoing current of 0.5 kn
+            return [{"time_utc": start + "T00:00:00Z", "current_speed_kn": 0.5, "current_dir_to_deg": 270.0}]
         assert provider == "om_era5"
         calls.append((lat, lon, start))
         year = int(start[:4])
-        trade = 17.0 if year == 2020 else 9.5  # 2021: weak trades, mostly motoring until fuel runs out
+        trade = 17.0 if year == 2020 else 7.0  # 2021: very weak trades, motoring until fuel runs out
         t0 = datetime.fromisoformat(start + "T00:00:00+00:00")
         n = int((datetime.fromisoformat(end + "T00:00:00+00:00") - t0).total_seconds() // 3600) + 24
         return [{"time_utc": (t0 + timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M:00Z"), "wind_speed_kn": trade,
@@ -41,6 +43,9 @@ def test_climate_run_counts_on_time_years(tmp_path, monkeypatch, cfg):
     assert len(calls) == n_calls and out2["summary"]["years"] == 2  # resumes from stored data and results
     assert "On time in 1 of 2 years" in climate.markdown(out2)
     assert climate.tracks_jpeg(str(tmp_path / "c.jpg"), out2)
+    no_cur = climate.run(conn, cfg, y, s, d, dep, by, [2020], res=5.0, motor_wind_below_kn=10, motor_speed_kn=8,
+                         motor_max_h=60, currents=False)
+    assert no_cur["results"][0]["days"] > res[2020]["days"]  # the westgoing current shortens the crossing
 
 
 def test_enso_weights_favour_similar_years():
@@ -70,6 +75,8 @@ def test_forecast_then_history(tmp_path, monkeypatch, cfg):
     from yachtspeed.geo import utcnow
 
     def fake_fetch(self, provider, kind, lat, lon, start, end):
+        if provider == "om_marine":
+            return []
         trade = 20.0 if provider.startswith("om_model") else 9.5
         t0 = datetime.fromisoformat(start + "T00:00:00+00:00")
         n = int((datetime.fromisoformat(end + "T00:00:00+00:00") - t0).total_seconds() // 3600) + 24

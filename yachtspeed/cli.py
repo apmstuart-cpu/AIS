@@ -648,6 +648,14 @@ def cmd_climate_route(cfg, a):
     depart = _dt.fromisoformat(a.depart).astimezone(_tz.utc)
     deadline = _dt.fromisoformat(a.by).astimezone(_tz.utc)
     y0, y1 = (int(x) for x in a.years.split("-"))
+    fuel_note = None
+    if a.motor_max_h is None and a.fuel_l:
+        # usable fuel after the reserve and the generator, at the motoring burn rate
+        allow_days = (deadline - depart).total_seconds() / 86400
+        usable = a.fuel_l * (1 - a.fuel_reserve) - a.genset_lph * 24 * allow_days
+        a.motor_max_h = max(0.0, round(usable / a.burn_lph))
+        fuel_note = (f"{a.fuel_l:g} L, {round(a.fuel_reserve * 100)}% reserve, generator {a.genset_lph:g} L/h, "
+                     f"{a.burn_lph:g} L/h motoring")
     out_dir = _P(a.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     base = out_dir / f"climate_{a.name}"
@@ -656,7 +664,8 @@ def cmd_climate_route(cfg, a):
                       motor_max_h=a.motor_max_h, maneuver_min=a.gybe_loss_min, per_day=a.max_calls_per_day,
                       wait=not a.no_wait, out_path=str(base) + ".json", name=a.name,
                       forecast_models=[m.strip() for m in a.forecast_models.split(",") if m.strip()],
-                      forecast_days=a.forecast_days, enso_sigma=a.enso_sigma)
+                      forecast_days=a.forecast_days, enso_sigma=a.enso_sigma, currents=not a.no_current,
+                      fuel_note=fuel_note)
     (_P(str(base) + ".md")).write_text(climate.markdown(out))
     climate.tracks_jpeg(str(base) + ".jpg", out)
     print(climate.markdown(out))
@@ -917,6 +926,11 @@ def build_parser():
                    help="live forecast for the first part of the passage ('' = past weather only)")
     s.add_argument("--forecast-days", type=float, default=10.0, help="trust the forecast this far ahead")
     s.add_argument("--enso-sigma", type=float, default=1.0, help="El Nino weighting width (ONI units)")
+    s.add_argument("--fuel-l", type=float, default=None, help="fuel on board (litres); sets --motor-max-h")
+    s.add_argument("--burn-lph", type=float, default=25.0, help="litres per hour when motoring")
+    s.add_argument("--genset-lph", type=float, default=2.0, help="average generator use over the passage")
+    s.add_argument("--fuel-reserve", type=float, default=0.10, help="share of fuel kept in reserve")
+    s.add_argument("--no-current", action="store_true", help="leave out the ocean current")
     s.set_defaults(fn=cmd_climate_route)
     s = sub.add_parser("screenshots", help="read new MarineTraffic screenshots (Dropbox folder) by OCR")
     s.add_argument("--reread-hours", type=float, default=0,
