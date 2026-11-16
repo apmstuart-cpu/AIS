@@ -291,7 +291,9 @@ def route(grid: WeatherGrid, land, start, t0: datetime, dest, table, factor=1.0,
             side = node.side or side
         return ve, vn, side, twa, motoring
 
-    for _ in range(steps):
+    closest = None  # (distance to destination, node): for diagnostics when no route is found
+    _step = 0
+    for _step in range(steps):
         new = {}
         for node in frontier:
             w = grid.sample(node.lat, node.lon, node.t)
@@ -299,6 +301,8 @@ def route(grid: WeatherGrid, land, start, t0: datetime, dest, table, factor=1.0,
                 continue
             # can we reach the destination directly within this step?
             d = haversine_nm(node.lat, node.lon, *dest)
+            if closest is None or d < closest[0]:
+                closest = (d, node)
             if d <= arrive_nm:
                 cand = (node.t, node, None)
                 best = cand if best is None or cand[0] < best[0] else best
@@ -348,7 +352,12 @@ def route(grid: WeatherGrid, land, start, t0: datetime, dest, table, factor=1.0,
         if not frontier:
             break
     if best is None:
-        return {"status": "no_route", "direct_nm": round(d_total, 1)}
+        diag = {"steps_run": _step + 1 if steps else 0, "frontier_at_end": len(frontier)}
+        if closest is not None:
+            diag.update({"closest_nm": round(closest[0], 1), "closest_at": iso(closest[1].t),
+                         "closest_pos": [round(closest[1].lat, 2), round(closest[1].lon, 2)],
+                         "finish_nm": round(finish_nm, 1)})
+        return {"status": "no_route", "direct_nm": round(d_total, 1), "diagnostics": diag}
 
     arr, node, fin = best
     track = []
