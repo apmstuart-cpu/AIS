@@ -12,6 +12,10 @@ def test_climate_run_counts_on_time_years(tmp_path, monkeypatch, cfg):
     def fake_fetch(self, provider, kind, lat, lon, start, end):
         if provider == "om_marine":  # a steady westgoing current of 0.5 kn
             return [{"time_utc": start + "T00:00:00Z", "current_speed_kn": 0.5, "current_dir_to_deg": 270.0}]
+        if provider == "om_era5_ocean":  # a 2.5 m following sea from the ENE
+            t0 = datetime.fromisoformat(start + "T00:00:00+00:00")
+            return [{"time_utc": (t0 + timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M:00Z"), "wave_height_m": 2.5,
+                     "wave_dir_from_deg": 65.0, "wave_period_s": 9.0} for h in range(0, 30 * 24, 3)]
         assert provider == "om_era5"
         calls.append((lat, lon, start))
         year = int(start[:4])
@@ -36,6 +40,7 @@ def test_climate_run_counts_on_time_years(tmp_path, monkeypatch, cfg):
     assert out["status"] == "complete" and res[2020]["on_time"] and not res[2021]["on_time"]
     assert out["summary"]["probability"] == 0.5 and res[2021]["motor_hours"] <= 64
     assert out["enso"]["now"]["oni"] == 2.46 and out["enso"]["years"]["2020"]["phase"] == "La Nina"
+    assert all(r["waves"] == "era5" for r in out["results"])  # pass 2 re-routed with the real waves
     assert out["summary"]["probability_enso_weighted"] is not None
     n_calls = len(calls)
     out2 = climate.run(conn, cfg, y, s, d, dep, by, [2020, 2021], res=5.0, motor_wind_below_kn=10,
@@ -80,7 +85,7 @@ def test_forecast_then_history(tmp_path, monkeypatch, cfg):
     from yachtspeed.geo import utcnow
 
     def fake_fetch(self, provider, kind, lat, lon, start, end):
-        if provider == "om_marine":
+        if provider in ("om_marine", "om_era5_ocean"):
             return []
         trade = (20.0 if "ecmwf" in provider else 15.0) if provider.startswith("om_model") else 9.5
         t0 = datetime.fromisoformat(start + "T00:00:00+00:00")

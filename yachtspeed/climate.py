@@ -39,6 +39,14 @@ CREATE TABLE IF NOT EXISTS climate_current (
     year INTEGER NOT NULL, cell_lat REAL NOT NULL, cell_lon REAL NOT NULL, start_md TEXT NOT NULL,
     u_sum REAL, v_sum REAL, n INTEGER, PRIMARY KEY (year, cell_lat, cell_lon, start_md)
 );
+CREATE TABLE IF NOT EXISTS climate_wave (
+    year INTEGER NOT NULL, cell_lat REAL NOT NULL, cell_lon REAL NOT NULL, time_utc TEXT NOT NULL,
+    hs REAL, dir_from REAL, period REAL, PRIMARY KEY (year, cell_lat, cell_lon, time_utc)
+);
+CREATE TABLE IF NOT EXISTS climate_wave_cells (
+    year INTEGER NOT NULL, cell_lat REAL NOT NULL, cell_lon REAL NOT NULL, start_date TEXT, end_date TEXT,
+    PRIMARY KEY (year, cell_lat, cell_lon, start_date, end_date)
+);
 CREATE TABLE IF NOT EXISTS climate_cells (
     year INTEGER NOT NULL, cell_lat REAL NOT NULL, cell_lon REAL NOT NULL, start_date TEXT, end_date TEXT,
     fetched_utc TEXT, PRIMARY KEY (year, cell_lat, cell_lon, start_date, end_date)
@@ -237,14 +245,16 @@ class WithCurrent:
 
 
 class WithSea:
-    """Adds a sea state derived from the local wind (fully developed sea, Pierson-Moskowitz):
+    """Adds the sea state: a past year's ERA5 waves where given and available, otherwise one
+    derived from the local wind (fully developed sea, Pierson-Moskowitz):
     Hs = 0.0246 U10^2 m and peak period 0.785 U10 s (U10 in m/s), from the wind direction.
     Open-ocean trade-wind seas are mostly wind-made; this lets the router apply its sea-state
     factor (following seas: up to +3 % surfing gain; head and beam seas: losses) without
     downloading wave history."""
 
-    def __init__(self, grid):
+    def __init__(self, grid, field=None):
         self.g = grid
+        self.field = field  # (WaveField, time shift onto its year, use_from) or None
         self.t0 = grid.t0
         self.data_end_h = getattr(grid, "data_end_h", 10 ** 6)
         self.lats, self.lons = getattr(grid, "lats", []), getattr(grid, "lons", [])
@@ -253,6 +263,14 @@ class WithSea:
         w = self.g.sample(lat, lon, t)
         if w is None or w.get("wave_height_m") is not None:
             return w
+        if self.field is not None:
+            wf, shift, use_from = self.field
+            if use_from is None or t >= use_from:
+                x = wf.at(lat, lon, t - shift)
+                if x is not None:
+                    w = dict(w)
+                    w["wave_height_m"], w["wave_dir_from_deg"], w["wave_period_s"] = x
+                    return w
         u = w["wind_speed_kn"] * 0.5144
         w = dict(w)
         w["wave_height_m"] = min(6.0, 0.0246 * u * u)
@@ -261,8 +279,85 @@ class WithSea:
         return w
 
 
-def sea(grid, waves=True):
-    return WithSea(grid) if waves else grid
+def sea(grid, waves=True, field=None):
+    return WithSea(grid, field) if waves else grid
+
+
+WAVE_RES = 7.5  # ocean waves are smooth over the open ocean; a coarse grid keeps downloads down
+
+
+def wave_bbox(bbox, res=WAVE_RES):
+    return (math.floor(bbox[0] / res) * res, math.floor(bbox[1] / res) * res,
+            math.ceil(bbox[2] / res) * res, math.ceil(bbox[3] / res) * res)
+
+
+def fetch_waves_year(conn, client, year, cells, start_date, end_date, thin_h=3):
+    """ERA5 ocean waves (height, direction, period) per cell for one year; raises QuotaExceeded."""
+    conn.executescript(SQL)
+    done = {(round(r[0], 4), round(r[1], 4)) for r in conn.execute(
+        "SELECT cell_lat, cell_lon FROM climate_wave_cells WHERE year=? AND start_date=? AND end_date=?",
+        (year, start_date, end_date))}
+    for la, lo in cells:
+        if (la, lo) in done:
+            continue
+        try:
+            rows = client.fetch("om_era5_ocean", "marine", la, lo, start_date, end_date)
+        except FetchError as e:
+            log(logger, logging.WARNING, "era5_wave_fetch_failed", year=year, lat=la, lon=lo, error=str(e)[:120])
+            rows = []
+        conn.execute("BEGIN")
+        for r in rows:
+            t = parse_iso(r["time_utc"])
+            if t.hour % thin_h or r.get("wave_height_m") is None:
+                continue
+            conn.execute("INSERT OR REPLACE INTO climate_wave VALUES (?,?,?,?,?,?,?)",
+                         (year, la, lo, iso(t), r["wave_height_m"], r.get("wave_dir_from_deg"), r.get("wave_period_s")))
+        conn.execute("INSERT OR REPLACE INTO climate_wave_cells VALUES (?,?,?,?,?)", (year, la, lo, start_date, end_date))
+        conn.execute("COMMIT")
+
+
+def waves_complete(conn, year, cells, start_date, end_date):
+    conn.executescript(SQL)
+    n = conn.execute("SELECT count(*) FROM climate_wave_cells WHERE year=? AND start_date=? AND end_date=?",
+                     (year, start_date, end_date)).fetchone()[0]
+    return n >= len(cells)
+
+
+class WaveField:
+    """One past year's ERA5 waves on the coarse grid, sampled at a time on that year's calendar
+    (bilinear in space, nearest 3-hourly step in time; directions as vectors)."""
+
+    def __init__(self, conn, year, bbox, res=WAVE_RES):
+        self.lat0, self.lon0, self.res = bbox[0], bbox[1], res
+        self.data = {}
+        for r in conn.execute("SELECT cell_lat, cell_lon, time_utc, hs, dir_from, period FROM climate_wave "
+                              "WHERE year=?", (year,)):
+            if r[3] is None:
+                continue
+            self.data[(round(r[0], 4), round(r[1], 4), r[2])] = (r[3], r[4] or 0.0, r[5])
+
+    def at(self, lat, lon, t):
+        if not self.data:
+            return None
+        key_t = iso(t.replace(hour=(t.hour // 3) * 3, minute=0, second=0, microsecond=0))
+        fi, fj = (lat - self.lat0) / self.res, (lon - self.lon0) / self.res
+        i0, j0 = int(fi // 1), int(fj // 1)
+        di, dj = fi - i0, fj - j0
+        hs = u = v = per = ws = 0.0
+        for (i, j), w in (((i0, j0), (1 - di) * (1 - dj)), ((i0 + 1, j0), di * (1 - dj)),
+                          ((i0, j0 + 1), (1 - di) * dj), ((i0 + 1, j0 + 1), di * dj)):
+            k = (round(self.lat0 + i * self.res, 4), round(self.lon0 + j * self.res, 4), key_t)
+            x = self.data.get(k)
+            if x is None or w <= 0:
+                continue
+            hs += w * x[0]
+            u += w * math.sin(math.radians(x[1]))
+            v += w * math.cos(math.radians(x[1]))
+            per += w * (x[2] or 0.0)
+            ws += w
+        if ws <= 0:
+            return None
+        return hs / ws, (math.degrees(math.atan2(u, v)) + 360) % 360, (per / ws) or None
 
 
 def fetch_currents(conn, client, bbox, res, depart, max_days, years=CURRENT_YEARS):
@@ -324,7 +419,7 @@ def run(conn, cfg, y, start, dest, depart: datetime, deadline: datetime, years, 
         max_days=28, step_h=4.0, heading_step=5, motor_wind_below_kn=None, motor_speed_kn=7.0, motor_max_h=None,
         maneuver_min=3.0, per_day=2500, per_hour=1200, per_minute=120, wait=True, out_path=None,
         name="climate", forecast_models=None, fade=(6.0, 12.0), enso_sigma=1.0, currents=True,
-        current_res=5.0, fuel_note=None, per_model=True, waves=True) -> dict:
+        current_res=5.0, fuel_note=None, per_model=True, waves=True, real_waves=True) -> dict:
     """Route `y` from `start` to `dest` leaving on `depart`'s month/day/time in each of `years`.
     `deadline` is in the same year as `depart`; the same interval is applied to every year."""
     from .land import mask_for_bbox
@@ -344,7 +439,8 @@ def run(conn, cfg, y, start, dest, depart: datetime, deadline: datetime, years, 
                         "motor_max_h": motor_max_h, "fuel": fuel_note,
                         "current": f"mean of {CURRENT_YEARS[0]}-{CURRENT_YEARS[-1]} for these dates" if currents
                         else "not modelled",
-                        "waves": "from the wind (fully developed sea); following seas up to +3 %" if waves
+                        "waves": ("ERA5 ocean waves (wind-derived until downloaded)" if real_waves else
+                                  "from the wind (fully developed sea)") + "; following seas up to +3 %" if waves
                         else "not modelled"},
            "results": [], "status": "running", "updated_utc": iso(utcnow())}
     if out_path and Path(out_path).exists():  # resume: keep finished years
@@ -396,31 +492,37 @@ def run(conn, cfg, y, start, dest, depart: datetime, deadline: datetime, years, 
             except Exception as e:  # a chart failure must not stop the run
                 log(logger, logging.WARNING, "climate_chart_failed", error=str(e)[:120])
 
-    for yr in years:
-        if yr in done_years:
-            continue
+    wcells = cells_for(wave_bbox(bbox), WAVE_RES)
+
+    def window(yr):
         d0 = depart.replace(year=yr)
         t_end = d0 + timedelta(days=max_days)
-        s_date, e_date = d0.strftime("%Y-%m-%d"), (t_end + timedelta(days=1)).strftime("%Y-%m-%d")
+        return d0, t_end, d0.strftime("%Y-%m-%d"), (t_end + timedelta(days=1)).strftime("%Y-%m-%d")
+
+    def with_quota(fn, label):
+        """Run fn(), waiting out the API budget; returns False if we must stop (no-wait / long pause)."""
         while True:
             try:
-                fetch_year(conn, client, yr, cells, s_date, e_date)
-                break
+                fn()
+                return True
             except QuotaExceeded as e:
                 pause = (e.resume_at - utcnow()).total_seconds()
-                out["status"] = f"waiting for weather quota until {iso(e.resume_at)} (year {yr})"
+                out["status"] = f"waiting for weather quota until {iso(e.resume_at)} ({label})"
                 save()
                 if not wait or pause > 26 * 3600:
-                    return out
-                log(logger, logging.INFO, "climate_quota_wait", until=iso(e.resume_at), year=yr)
+                    return False
+                log(logger, logging.INFO, "climate_quota_wait", until=iso(e.resume_at), what=label)
                 time.sleep(max(5.0, pause + 5))
+
+    def route_year(yr):
+        d0, t_end, s_date, e_date = window(yr)
         grid = ClimateGrid(conn, yr, bbox, d0, t_end, res).load()
         if len(grid.wind) < 0.9 * len(cells):
-            out["results"].append({"year": yr, "status": "missing_weather", "cells": len(grid.wind)})
-            save()
-            continue
+            return {"year": yr, "status": "missing_weather", "cells": len(grid.wind)}
+        real = real_waves and waves and waves_complete(conn, yr, wcells, s_date, e_date)
+        wf = (WaveField(conn, yr, wave_bbox(bbox)), timedelta(0), None) if real else None
         t_run = time.time()
-        r = route(sea(WithCurrent(grid, field), waves), land, start, d0, dest, y.speed_table or "cruiser27",
+        r = route(sea(WithCurrent(grid, field), waves, wf), land, start, d0, dest, y.speed_table or "cruiser27",
                   y.polar_factor, step_h=step_h, heading_step=heading_step, maneuver_min=maneuver_min,
                   max_hours=max_days * 24, use_waves=waves, use_current=True, motor_wind_below_kn=motor_wind_below_kn,
                   motor_speed_kn=motor_speed_kn, motor_max_h=motor_max_h)
@@ -436,17 +538,42 @@ def run(conn, cfg, y, start, dest, depart: datetime, deadline: datetime, years, 
                      "wind_median_kn": round(statistics.median(winds), 1) if winds else None,
                      "southmost_lat": round(min(p["lat"] for p in r["track"]), 1),
                      "track": _thin(r["track"])}
+        res_y["waves"] = "era5" if real else ("wind" if waves else "none")
         res_y["route_seconds"] = round(time.time() - t_run)
-        out["results"].append(res_y)
-        log(logger, logging.INFO, "climate_year", year=yr, days=res_y.get("days"), on_time=res_y.get("on_time"))
+        return res_y
+
+    def put(res_y):
+        out["results"] = [r for r in out["results"] if r["year"] != res_y["year"]] + [res_y]
+        log(logger, logging.INFO, "climate_year", year=res_y["year"], days=res_y.get("days"),
+            on_time=res_y.get("on_time"), waves=res_y.get("waves"))
         save()
+
+    # pass 1: every year's wind and a first route (real waves where already stored, else from the wind)
+    for yr in years:
+        if yr in done_years:
+            continue
+        d0, t_end, s_date, e_date = window(yr)
+        if not with_quota(lambda: fetch_year(conn, client, yr, cells, s_date, e_date), f"wind {yr}"):
+            return out
+        put(route_year(yr))
+    # pass 2: real ERA5 ocean waves, then re-route the years that used the wind-derived sea
+    if real_waves and waves:
+        for yr in years:
+            prev = next((r for r in out["results"] if r["year"] == yr), None)
+            if prev and prev.get("waves") == "era5":
+                continue
+            d0, t_end, s_date, e_date = window(yr)
+            if not with_quota(lambda: fetch_waves_year(conn, client, yr, wcells, s_date, e_date), f"waves {yr}"):
+                return out
+            put(route_year(yr))
     if forecast_models:
         out["status"] = "running the live forecast"
         save()
         out["forecast"] = run_forecast(conn, cfg, y, start, dest, depart, bbox, res, land, years, allow_h, max_days,
                                        step_h, heading_step, maneuver_min, motor_wind_below_kn, motor_speed_kn,
                                        motor_max_h, forecast_models, fade, save_cb=save, holder=out,
-                                       field=field, per_model=per_model, enso_w=weights, waves=waves)
+                                       field=field, per_model=per_model, enso_w=weights, waves=waves,
+                                       real_waves=real_waves)
     out["status"] = "complete"
     save()
     return out
@@ -454,7 +581,8 @@ def run(conn, cfg, y, start, dest, depart: datetime, deadline: datetime, years, 
 
 def run_forecast(conn, cfg, y, start, dest, depart, bbox, res, land, years, allow_h, max_days, step_h, heading_step,
                  maneuver_min, motor_wind_below_kn, motor_speed_kn, motor_max_h, models, fade,
-                 save_cb=None, holder=None, field=None, per_model=True, enso_w=None, waves=True) -> dict:
+                 save_cb=None, holder=None, field=None, per_model=True, enso_w=None, waves=True,
+                 real_waves=True) -> dict:
     """The live forecast (blend of `models`, skill-weighted), handing over between `fade` days after now, to each past
     year's weather for the rest of the passage."""
     from .router import BlendGrid
@@ -501,8 +629,17 @@ def run_forecast(conn, cfg, y, start, dest, depart, bbox, res, land, years, allo
         clim = ClimateGrid(conn, yr, bbox, d0, d0 + timedelta(days=max_days), res).load()
         if len(clim.wind) < 0.9 * len(clim.lats) * len(clim.lons):
             continue
+        s_date, e_date = d0.strftime("%Y-%m-%d"), (d0 + timedelta(days=max_days + 1)).strftime("%Y-%m-%d")
+        wcells = cells_for(wave_bbox(bbox), WAVE_RES)
+        wfield = WaveField(conn, yr, wave_bbox(bbox)) if real_waves and waves_complete(
+            conn, yr, wcells, s_date, e_date) else None
+
+        def wf(handover_end):  # the past year's real waves once its weather has taken over
+            return (wfield, depart - d0, handover_end) if wfield is not None else None
+
         for m, g in variants[1:]:  # the same past year, after each model's own forecast
-            r = route(sea(WithCurrent(HybridGrid(g, clim, *windows[m], depart - d0), field), waves), land, start,
+            r = route(sea(WithCurrent(HybridGrid(g, clim, *windows[m], depart - d0), field), waves,
+                          wf(windows[m][1])), land, start,
                       depart, dest, y.speed_table or "cruiser27", y.polar_factor, step_h=step_h,
                       heading_step=heading_step, maneuver_min=maneuver_min, max_hours=max_days * 24,
                       use_waves=waves, use_current=True,
@@ -515,7 +652,7 @@ def run_forecast(conn, cfg, y, start, dest, depart, bbox, res, land, years, allo
                                       "on_time": r["hours"] <= allow_h, "margin_h": round(allow_h - r["hours"], 1),
                                       "sailed_nm": r["sailed_nm"], "motor_hours": r.get("motor_hours", 0.0)})
             pm["summary"] = summarise(pm["results"], allow_h, enso_w)
-        hg = sea(WithCurrent(HybridGrid(blend, clim, fs, fe, depart - d0), field), waves)
+        hg = sea(WithCurrent(HybridGrid(blend, clim, fs, fe, depart - d0), field), waves, wf(fe))
         r = route(hg, land, start, depart, dest, y.speed_table or "cruiser27", y.polar_factor, step_h=step_h,
                   heading_step=heading_step, maneuver_min=maneuver_min, max_hours=max_days * 24, use_waves=waves,
                   use_current=True, motor_wind_below_kn=motor_wind_below_kn, motor_speed_kn=motor_speed_kn,
@@ -619,20 +756,21 @@ def markdown(out) -> str:
                      if s.get("probability_enso_weighted") is not None else "")
                   + f"Passage time: median {s['days_median']} days (10-90 %: {s['days_p10']}-{s['days_p90']}); "
                   f"median {s['sailed_nm_median']} nm sailed, {s['motor_hours_median']} h motoring.", "",
-                  "| Year | ENSO (Oct-Dec ONI) | Weight | Arrives (this year) | Days | On time | Margin (h) | Sailed nm | Avg kn | Motor h | Median wind kn | Furthest south |",
-                  "|---|---|---|---|---|---|---|---|---|---|---|---|"]
+                  "| Year | ENSO (Oct-Dec ONI) | Weight | Arrives (this year) | Days | On time | Margin (h) | Sailed nm | Avg kn | Motor h | Median wind kn | Furthest south | Sea state |",
+                  "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
         for r in sorted(out["results"], key=lambda r: r["year"]):
             e = ey.get(str(r["year"]), {})
             ens = f"{e.get('phase', '-')} ({e.get('oni')})" if e else "-"
             wt = e.get("weight", "-")
             if r.get("status") != "ok":
-                lines.append(f"| {r['year']} | {ens} | {wt} | {r.get('status')} | | {'no' if r.get('status') == 'no_route' else '-'} | | | | | | |")
+                lines.append(f"| {r['year']} | {ens} | {wt} | {r.get('status')} | | {'no' if r.get('status') == 'no_route' else '-'} | | | | | | | |")
                 continue
             dep = parse_iso(out["depart"])
             eta_now = parse_iso(r["eta"]) + (dep - dep.replace(year=r["year"]))  # on this year's calendar
             lines.append(f"| {r['year']} | {ens} | {wt} | {eta_now:%a %d %b %H:%M} | {r['days']} | "
                          f"{'yes' if r['on_time'] else 'no'} | {r['margin_h']:+} | {r['sailed_nm']} | {r['avg_kn']} | "
-                         f"{r['motor_hours']} | {r['wind_median_kn']} | {r['southmost_lat']}N |")
+                         f"{r['motor_hours']} | {r['wind_median_kn']} | {r['southmost_lat']}N | "
+                         f"{ {'era5': 'ERA5 waves', 'wind': 'from wind', 'none': '-'}.get(r.get('waves'), '-') } |")
     return "\n".join(lines) + "\n"
 
 

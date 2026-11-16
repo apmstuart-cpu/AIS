@@ -157,6 +157,9 @@ class OpenMeteo:
         if kind == "marine":
             params["hourly"] = ",".join(MARINE_VARS)
             params["cell_selection"] = "sea"
+            if provider == "om_era5_ocean":  # ERA5 ocean-wave reanalysis (waves only, back to 1940)
+                params["models"] = "era5_ocean"
+                params["hourly"] = "wave_height,wave_direction,wave_period"
             body = self._get("om_marine", params)
             cols = {
                 "wave_height_m": self._hourly(body, "wave_height"),
