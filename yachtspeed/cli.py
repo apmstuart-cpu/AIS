@@ -638,6 +638,11 @@ def cmd_screenshots(cfg, a):
         return
     if a.reprocess:
         conn.execute("DELETE FROM ocr_files WHERE status != 'ok'")
+    if a.reread_hours:  # re-read recent screenshots too (positions already stored are skipped as duplicates)
+        from .geo import iso as _iso, utcnow as _now
+        from datetime import timedelta as _td
+
+        conn.execute("DELETE FROM ocr_files WHERE processed_utc >= ?", (_iso(_now() - _td(hours=a.reread_hours)),))
     res = screenshots.run(conn, cfg)
     db.heartbeat(conn, "screenshots", res)
     _print(res)
@@ -857,6 +862,8 @@ def build_parser():
     s.add_argument("--show", action="store_true", help="only print scores and weights (no API calls)")
     s.set_defaults(fn=cmd_skill)
     s = sub.add_parser("screenshots", help="read new MarineTraffic screenshots (Dropbox folder) by OCR")
+    s.add_argument("--reread-hours", type=float, default=0,
+                   help="also re-read screenshots processed in the last N hours (e.g. to pick up port calls)")
     s.add_argument("--review", action="store_true", help="list screenshots that could not be read")
     s.add_argument("--hours", type=int, default=48)
     s.add_argument("--reprocess", action="store_true", help="retry screenshots that failed before")

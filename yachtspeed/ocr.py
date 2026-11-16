@@ -34,6 +34,7 @@ class OcrFix:
     sog_kn: float | None = None
     cog_deg: float | None = None
     notes: list = field(default_factory=list)
+    port_calls: list = field(default_factory=list)  # [{port, arrival_utc, departure_utc}] from the app's list
 
 
 def available() -> bool:
@@ -170,6 +171,35 @@ def parse_app_time(text: str, year: int):
                     tzinfo=timezone.utc)
 
 
+_PC_TIME = r"(\d{2})/(\d{2})/(\d{4})\s+(\d{1,2}):(\d{2})\s*UTC"
+
+
+def parse_port_calls(text: str) -> list:
+    """The app's 'Latest port calls' list: a port line ('GIBRALTAR WEST ANCH, GI') followed by
+    'Arrival : 13/11/2026 07:33 UTC' and 'Departure : 13/11/2026 08:07 UTC' lines."""
+    def when(m):
+        d, mo, y, h, mi = map(int, m.groups())
+        try:
+            return datetime(y, mo, d, h, mi, tzinfo=timezone.utc)
+        except ValueError:
+            return None
+
+    calls, cur = [], None
+    for line in text.splitlines():
+        a = re.search(r"[Aa]rriv\w*\s*:?\s*" + _PC_TIME, line)
+        dep = re.search(r"[Dd]epart\w*\s*:?\s*" + _PC_TIME, line)
+        if a and cur is not None:
+            cur["arrival_utc"] = when(a)
+        elif dep and cur is not None:
+            cur["departure_utc"] = when(dep)
+        else:
+            m = re.search(r"([A-Z][A-Z0-9 .'\-]{2,40}?)\s*,+\s*([A-Z][A-Za-z])\b", line)
+            if m and "PORT CALLS" not in line.upper():
+                cur = {"port": f"{m.group(1).strip()}, {m.group(2).upper()}", "arrival_utc": None, "departure_utc": None}
+                calls.append(cur)
+    return [c for c in calls if c["arrival_utc"] or c["departure_utc"]]
+
+
 def _scan_app_coords(img):
     """The app's coordinate label sits on the map, where a whole-page read misses it: read
     overlapping strips of the right half at higher magnification until it turns up."""
@@ -242,6 +272,8 @@ def read_screenshot(path: str, fleet_names: list[str]) -> OcrFix:
             fx.fix_utc = (capture - ago).replace(second=0, microsecond=0)
         else:
             fx.notes.append("fix time not read" if capture else "no capture time in file name")
+    if re.search(r"port\s*calls", full, re.I):
+        fx.port_calls = parse_port_calls(_tess(_prep(img, (0, 0.6, 1, 1), scale=2), psm=6))
     if fx.sog_kn is None:
         fx.notes.append("speed not read")
     if fx.cog_deg is None:

@@ -308,6 +308,12 @@ def build(conn, cfg, models=None) -> dict:
         p = yacht_passage(conn, cfg, client, y, models)
         p["polar"] = polar_evidence(conn, cfg, client, y)  # also for recording-only yachts with a polar
         try:
+            from .screenshots import port_calls
+
+            p["port_calls"] = port_calls(conn, y.mmsi)
+        except Exception:
+            p["port_calls"] = []
+        try:
             p["progress"] = progress(conn, cfg, client, y)
         except Exception as e:  # never let this break the report
             p["progress"] = {"error": f"{type(e).__name__}: {e}"[:120]}
@@ -406,7 +412,10 @@ def markdown(rep: dict) -> str:
             pol_s = (f"; last 24 h at **{pol['median_pct']}%** of {pol['table']} ({pol['fixes']} fixes)"
                      if pol.get("median_pct") is not None else "; no polar configured" if not y.get("polar") else "")
             src = ", ".join(f"{k} {v}" for k, v in pr["sources"].items())
-            lines.append(f"- **{y['yacht']}**: by UTC day {daily}{pol_s}. Fixes: {src}.")
+            pcs = "; ".join(f"{c['port']} arr {t(c['arrival_utc']) if c['arrival_utc'] else '?'}, "
+                            f"dep {t(c['departure_utc']) if c['departure_utc'] else '-'}" for c in y.get("port_calls") or [])
+            lines.append(f"- **{y['yacht']}**: by UTC day {daily}{pol_s}. Fixes: {src}."
+                         + (f" Port calls (MarineTraffic): {pcs}." if pcs else ""))
         lines.append("")
     ms = rep.get("model_skill") or {}
     if any(ms.values()):

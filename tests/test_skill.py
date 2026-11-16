@@ -137,3 +137,14 @@ def test_new_unreadable_screenshot_keeps_its_review_copy(tmp_path, monkeypatch, 
     st = screenshots.run(conn, cfg, review_dir=rd)
     assert st["review"] == 1
     assert (rd / "Screenshot 2026-11-16 at 07.00.20.jpg").exists()
+
+
+def test_parse_port_calls_from_app_text():
+    from yachtspeed.ocr import parse_port_calls
+
+    txt = ("Latest port calls view all >\nGIBRALTAR WEST ANCH,, GI\nei Arrival : 13/11/2026 07:33 UTC >\n"
+           "Departure : 13/11/2026 08:07 UTC\nALCAIDESA, ES\n& arrival : 10/11/2026 17:07 UTC >\n")
+    pc = parse_port_calls(txt)
+    assert [c["port"] for c in pc] == ["GIBRALTAR WEST ANCH, GI", "ALCAIDESA, ES"]
+    assert pc[0]["departure_utc"] == datetime(2026, 11, 13, 8, 7, tzinfo=timezone.utc)
+    assert pc[1]["departure_utc"] is None

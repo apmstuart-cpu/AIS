@@ -119,6 +119,28 @@ def purge_stale(conn, days=3) -> list:
     return gone
 
 
+PORT_CALLS_SQL = """CREATE TABLE IF NOT EXISTS port_calls (
+    mmsi TEXT NOT NULL, port TEXT NOT NULL, arrival_utc TEXT NOT NULL DEFAULT '', departure_utc TEXT,
+    source_file TEXT, seen_utc TEXT, PRIMARY KEY (mmsi, port, arrival_utc))"""
+
+
+def store_port_calls(conn, mmsi, calls, source_file):
+    conn.execute(PORT_CALLS_SQL)
+    for c in calls:
+        arr = iso(c["arrival_utc"]) if c.get("arrival_utc") else ""
+        dep = iso(c["departure_utc"]) if c.get("departure_utc") else None
+        conn.execute("INSERT INTO port_calls VALUES (?,?,?,?,?,?) ON CONFLICT(mmsi, port, arrival_utc) DO UPDATE SET "
+                     "departure_utc=coalesce(excluded.departure_utc, departure_utc), source_file=excluded.source_file, "
+                     "seen_utc=excluded.seen_utc", (mmsi, c["port"], arr, dep, source_file, iso(utcnow())))
+
+
+def port_calls(conn, mmsi, limit=3) -> list:
+    conn.execute(PORT_CALLS_SQL)
+    return [dict(r) for r in conn.execute(
+        "SELECT port, arrival_utc, departure_utc FROM port_calls WHERE mmsi=? "
+        "ORDER BY coalesce(departure_utc, arrival_utc) DESC LIMIT ?", (mmsi, limit))]
+
+
 def run(conn, cfg, review_dir: Path = REVIEW_DIR) -> dict:
     from .collector import Store
     from .ocr import available, read_screenshot
@@ -156,6 +178,8 @@ def run(conn, cfg, review_dir: Path = REVIEW_DIR) -> dict:
                 stats["review"] += 1
                 continue
             stored = 0
+            if fx.port_calls and fx.yacht:
+                store_port_calls(conn, names[fx.yacht], fx.port_calls, p.name)
             if fx.status == "ok":
                 earlier = stale_repeat(conn, names[fx.yacht], fx.fix_utc, fx.lat, fx.lon, fx.sog_kn)
                 if earlier:
