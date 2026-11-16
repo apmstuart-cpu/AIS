@@ -559,8 +559,13 @@ def cmd_route(cfg, a):
     results = []
     for m in models:
         prov = "metno" if m == "metno" else ("blend" if m in ("blend", "combined") else model_provider(m))
+        mot = {}
+        if a.motor_below is not None:
+            mot = {"motor_wind_below_kn": a.motor_below, "motor_speed_kn": a.motor_speed}
+        if a.motor_max_h is not None:
+            mot["motor_max_h"] = a.motor_max_h
         r = route_yacht(conn, cfg, client, y, (lat, lon), at, dest, prov, res=a.grid_res,
-                        step_h=a.step_h, heading_step=a.heading_step, maneuver_min=a.gybe_loss_min)
+                        step_h=a.step_h, heading_step=a.heading_step, maneuver_min=a.gybe_loss_min, **mot)
         if r.get("status") == "ok" and r.get("hours_beyond_forecast", 0) > 0:
             r["note"] = f"forecast ends {r['forecast_ends_utc']}; last {r['hours_beyond_forecast']} h assume it holds"
         r["model"] = m
@@ -577,6 +582,7 @@ def cmd_route(cfg, a):
             continue
         print(f"  {r['model']:8s} {parse_iso(r['eta_utc']):%a %d %H:%MZ}   {r['hours']:6.1f} {r['sailed_nm']:9.1f} "
               f"{r['direct_nm']:9.1f} {r['avg_sog_kn']:6.1f} {r['maneuvers']:11d}"
+              + (f"  motor {r['motor_hours']:g} h" if r.get("motor_hours") else "")
               + (f"   ({r['note']})" if r.get("note") else ""))
     ok = [r for r in results if r["status"] == "ok"]
     for r in results:
@@ -898,6 +904,9 @@ def build_parser():
     s.add_argument("--grid-res", type=float, help="forecast grid spacing in degrees (default: by passage size)")
     s.add_argument("--track", action="store_true", help="print the routed track")
     s.add_argument("--track-every", type=float, default=3.0)
+    s.add_argument("--motor-below", type=float, help="motor when true wind is below this (kn)")
+    s.add_argument("--motor-speed", type=float, default=8.0)
+    s.add_argument("--motor-max-h", type=float, help="fuel: most hours of motoring")
     start_args(s)
     s.set_defaults(fn=cmd_route)
     s = sub.add_parser("skill", help="verify the models' past wind forecasts; prints skill and blend weights")
