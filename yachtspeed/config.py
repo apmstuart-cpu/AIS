@@ -29,6 +29,7 @@ class Yacht:
     polar_factor: float = 1.0  # scale for speed_table (racing VPP -> cruising)
     motor_below_kn: float | None = None  # passages: motor when sailing would be slower than this
     motor_speed_kn: float | None = None  # passages: motoring speed
+    motor_wind_below_kn: float | None = None  # routing: motor (or motor-sail) when true wind is below this
     destination: str = ""  # named destination for reports, e.g. "rubicon" (see speedtable.DESTINATIONS)
     forecast: bool = True  # false = recording only: the report shows fixes but no ETAs or routing
 

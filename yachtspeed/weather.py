@@ -30,6 +30,7 @@ ENDPOINTS = {
     "om_hist_forecast": "https://historical-forecast-api.open-meteo.com/v1/forecast",
     "om_prev": "https://previous-runs-api.open-meteo.com/v1/forecast",
     "om_marine": "https://marine-api.open-meteo.com/v1/marine",
+    "om_archive": "https://archive-api.open-meteo.com/v1/archive",  # ERA5 reanalysis (past years)
 }
 WIND_VARS = ["wind_speed_10m", "wind_direction_10m", "wind_gusts_10m"]
 
@@ -169,6 +170,9 @@ class OpenMeteo:
                 n = int(provider.removeprefix("om_prev_day"))
                 names = [f"{v}_previous_day{n}" for v in WIND_VARS]
                 key = "om_prev"
+            elif provider == "om_era5":  # ERA5 reanalysis, for climatology (past years)
+                names, key = WIND_VARS, "om_archive"
+                params["models"] = "era5"
             elif provider.startswith("om_model:"):  # one named model from the forecast API
                 names, key = WIND_VARS, "om_forecast"
                 params["models"] = provider.split(":", 1)[1]

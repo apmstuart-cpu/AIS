@@ -628,6 +628,38 @@ def cmd_skill(cfg, a):
         print(f"arrival {r['mmsi']} {r['destination']} {r['arrived_utc']}: ETA mean abs error h (n) {r['mae_h']}")
 
 
+def cmd_climate_route(cfg, a):
+    """Passage odds from past weather (ERA5): route the yacht through the same dates in past years."""
+    from datetime import datetime as _dt, timezone as _tz
+    from pathlib import Path as _P
+
+    from . import climate
+    from .speedtable import parse_destination
+
+    conn = _conn(cfg)
+    mmsi = _mmsi(cfg, a.yacht)
+    y = next((y for y in cfg.fleet if y.mmsi == mmsi), None)
+    if y is None or not y.speed_table:
+        sys.exit("yacht not in config, or it has no speed_table (polar)")
+    if a.polar_factor is not None:
+        y.polar_factor = a.polar_factor
+    _, start = parse_destination(a.frm)
+    _, dest = parse_destination(a.to)
+    depart = _dt.fromisoformat(a.depart).astimezone(_tz.utc)
+    deadline = _dt.fromisoformat(a.by).astimezone(_tz.utc)
+    y0, y1 = (int(x) for x in a.years.split("-"))
+    out_dir = _P(a.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    base = out_dir / f"climate_{a.name}"
+    out = climate.run(conn, cfg, y, start, dest, depart, deadline, list(range(y0, y1 + 1)), res=a.res,
+                      step_h=a.step_h, motor_wind_below_kn=a.motor_below, motor_speed_kn=a.motor_speed,
+                      motor_max_h=a.motor_max_h, maneuver_min=a.gybe_loss_min, per_day=a.max_calls_per_day,
+                      wait=not a.no_wait, out_path=str(base) + ".json", name=a.name)
+    (_P(str(base) + ".md")).write_text(climate.markdown(out))
+    climate.tracks_jpeg(str(base) + ".jpg", out)
+    print(climate.markdown(out))
+
+
 def cmd_screenshots(cfg, a):
     from . import screenshots
 
@@ -861,6 +893,25 @@ def build_parser():
     s.add_argument("--days", type=int, default=14, help="verify up to this many past days not yet done")
     s.add_argument("--show", action="store_true", help="only print scores and weights (no API calls)")
     s.set_defaults(fn=cmd_skill)
+    s = sub.add_parser("climate-route", help="passage odds: route through the same dates in past years (ERA5)")
+    s.add_argument("--yacht", required=True)
+    s.add_argument("--from", dest="frm", required=True, help="named place or lat,lon")
+    s.add_argument("--to", required=True, help="named place or lat,lon")
+    s.add_argument("--depart", required=True, help="e.g. 2026-11-20T10:00+00:00 (month/day/time reused each year)")
+    s.add_argument("--by", required=True, help="deadline, e.g. 2026-12-06T23:59-04:00 (Antigua local)")
+    s.add_argument("--years", default="2006-2025")
+    s.add_argument("--res", type=float, default=2.5, help="grid spacing in degrees")
+    s.add_argument("--step-h", type=float, default=4.0)
+    s.add_argument("--motor-below", type=float, default=None, help="motor when true wind is below this (kn)")
+    s.add_argument("--motor-speed", type=float, default=8.0)
+    s.add_argument("--motor-max-h", type=float, default=None, help="fuel: most hours of motoring")
+    s.add_argument("--polar-factor", type=float, default=None)
+    s.add_argument("--gybe-loss-min", type=float, default=3.0)
+    s.add_argument("--max-calls-per-day", type=int, default=2500, help="archive API calls per day")
+    s.add_argument("--name", default="passage")
+    s.add_argument("--out-dir", default="/var/lib/yachtspeed/report")
+    s.add_argument("--no-wait", action="store_true", help="stop at the API's daily limit instead of waiting")
+    s.set_defaults(fn=cmd_climate_route)
     s = sub.add_parser("screenshots", help="read new MarineTraffic screenshots (Dropbox folder) by OCR")
     s.add_argument("--reread-hours", type=float, default=0,
                    help="also re-read screenshots processed in the last N hours (e.g. to pick up port calls)")

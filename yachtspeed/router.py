@@ -235,7 +235,8 @@ def _move(lat, lon, ve_kn, vn_kn, hours):
 
 def route(grid: WeatherGrid, land, start, t0: datetime, dest, table, factor=1.0, step_h=1.0,
           heading_step=5, sector_deg=2.0, maneuver_min=3.0, max_hours=240, use_waves=True,
-          use_current=True, arrive_nm=1.0, harbour_nm=2.0) -> dict:
+          use_current=True, arrive_nm=1.0, harbour_nm=2.0, motor_wind_below_kn=None,
+          motor_speed_kn=7.0, motor_max_h=None) -> dict:
     """Isochrone routing. Returns dict with ETA, track and summary, or status 'no_route'."""
     s_lat, s_lon = start
     brg_sd = initial_bearing(s_lat, s_lon, *dest)
@@ -246,13 +247,22 @@ def route(grid: WeatherGrid, land, start, t0: datetime, dest, table, factor=1.0,
     steps = int(max_hours / step_h)
     # within this distance a direct finish is always evaluated as a candidate (the search front
     # can otherwise step past the marina when the direct heading is slow, e.g. dead downwind)
-    finish_nm = max(15.0, 12.0 * step_h)
+    # and on an ocean crossing the pruning sectors are wide by the time they reach the far side, so
+    # the finish zone grows with the passage (about one sector's width at the destination)
+    finish_nm = max(15.0, 12.0 * step_h, 1.2 * d_total * math.radians(sector_deg))
 
     def velocity(node, w, heading):
         twa_signed = ((w["wind_dir_from_deg"] - heading + 540) % 360) - 180
         twa = abs(twa_signed)
         stw = boat_speed(w["wind_speed_kn"], twa, table, factor)
-        if stw <= 0.2:
+        motoring = bool(motor_wind_below_kn) and w["wind_speed_kn"] < motor_wind_below_kn
+        if motoring and motor_max_h is not None and node.extra.get("mh", 0.0) >= motor_max_h:
+            motoring = False  # out of fuel: sail whatever the wind
+            if stw <= 0.2:
+                return None
+        if motoring:  # light air: motor (or motor-sail if that is faster), any heading, no gybes
+            stw = max(stw, motor_speed_kn)
+        elif stw <= 0.2:
             return None
         if use_waves:
             stw *= wave_factor(w.get("wave_height_m"), w.get("wave_dir_from_deg"), heading,
@@ -262,7 +272,9 @@ def route(grid: WeatherGrid, land, start, t0: datetime, dest, table, factor=1.0,
             ve += w["current_u"]
             vn += w["current_v"]
         side = 1 if twa_signed > 0 else -1
-        return ve, vn, side, twa
+        if motoring:
+            side = node.side or side
+        return ve, vn, side, twa, motoring
 
     for _ in range(steps):
         new = {}
@@ -279,7 +291,7 @@ def route(grid: WeatherGrid, land, start, t0: datetime, dest, table, factor=1.0,
             h_dest = initial_bearing(node.lat, node.lon, *dest)
             vel = velocity(node, w, h_dest)
             if vel:
-                ve, vn, side, twa = vel
+                ve, vn, side, twa, _mot = vel
                 sog_along = ve * math.sin(math.radians(h_dest)) + vn * math.cos(math.radians(h_dest))
                 pen = maneuver_min / 60 if node.side and side != node.side else 0.0
                 if sog_along > 0.5 and d <= finish_nm and \
@@ -291,7 +303,7 @@ def route(grid: WeatherGrid, land, start, t0: datetime, dest, table, factor=1.0,
                 vel = velocity(node, w, k)
                 if not vel:
                     continue
-                ve, vn, side, twa = vel
+                ve, vn, side, twa, mot = vel
                 hours = step_h
                 man = 0
                 if node.side and side != node.side:
@@ -312,7 +324,8 @@ def route(grid: WeatherGrid, land, start, t0: datetime, dest, table, factor=1.0,
                 if cur is None or score > cur.extra["score"]:
                     new[key] = Node(lat, lon, node.t + timedelta(hours=step_h), node, k, side,
                                     math.hypot(ve, vn), w["wind_speed_kn"], twa, node.maneuvers + man, ds,
-                                    {"score": score, "wind_from": round(w["wind_dir_from_deg"]),
+                                    {"score": score, "wind_from": round(w["wind_dir_from_deg"]), "motor": mot,
+                                     "mh": node.extra.get("mh", 0.0) + (step_h if mot else 0.0),
                                      "wave_m": round(w["wave_height_m"], 1) if w.get("wave_height_m") is not None else None})
         if best is not None and (not new or best[0] <= min(n.t for n in new.values())):
             break
@@ -333,7 +346,8 @@ def route(grid: WeatherGrid, land, start, t0: datetime, dest, table, factor=1.0,
             "heading": x.heading, "sog_kn": round(x.sog, 2) if x.sog else None,
             "tws_kn": round(x.tws, 1) if x.tws is not None else None,
             "twa_deg": round(x.twa) if x.twa is not None else None, "side": x.side or None,
-            "wind_from_deg": x.extra.get("wind_from"), "wave_m": x.extra.get("wave_m")} for x in track]
+            "wind_from_deg": x.extra.get("wind_from"), "wave_m": x.extra.get("wave_m"),
+            "motor": bool(x.extra.get("motor"))} for x in track]
     maneuvers = node.maneuvers
     if fin:
         if node.side and fin["side"] != node.side:
@@ -341,13 +355,15 @@ def route(grid: WeatherGrid, land, start, t0: datetime, dest, table, factor=1.0,
         pts.append({"time_utc": iso(arr), "lat": dest[0], "lon": dest[1], "heading": round(fin["heading"]),
                     "sog_kn": round(fin["sog"], 2), "tws_kn": None, "twa_deg": round(fin["twa"])})
     sailed = sum(haversine_nm(a["lat"], a["lon"], b["lat"], b["lon"]) for a, b in zip(pts, pts[1:]))
+    motor_h = sum((parse_iso(b["time_utc"]) - parse_iso(a["time_utc"])).total_seconds() / 3600
+                  for a, b in zip(pts, pts[1:]) if b.get("motor"))
     hours = (arr - t0).total_seconds() / 3600
     fc_end = grid.t0 + timedelta(hours=getattr(grid, "data_end_h", hours))
     beyond = max(0.0, (arr - fc_end).total_seconds() / 3600)
     return {"status": "ok", "forecast_ends_utc": iso(fc_end), "hours_beyond_forecast": round(beyond, 1), "departure_utc": iso(t0), "eta_utc": iso(arr), "hours": round(hours, 2),
             "direct_nm": round(d_total, 1), "sailed_nm": round(sailed, 1),
             "avg_sog_kn": round(sailed / hours, 2) if hours else None,
-            "maneuvers": maneuvers, "track": pts}
+            "maneuvers": maneuvers, "motor_hours": round(motor_h, 1), "track": pts}
 
 
 def grid_bbox(start, dest, res=0.5, margin=None):
@@ -410,6 +426,8 @@ def route_yacht(conn, cfg, client, y, start, t0, dest, wind_provider, hours_gues
         grid = WeatherGrid(conn, client, bbox, t0, t_end, wind_provider, res=res).load()
         grid.hold_beyond_h = max_days * 24.0
     land = mask_for_bbox(tuple(round(x, 3) for x in bbox))
+    kw.setdefault("motor_wind_below_kn", getattr(y, "motor_wind_below_kn", None))
+    kw.setdefault("motor_speed_kn", getattr(y, "motor_speed_kn", None) or 7.0)
     r = route(grid, land, start, t0, dest, y.speed_table or "cruiser27", y.polar_factor,
               step_h=step_h, max_hours=horizon + 6, **kw)
     r["grid"] = {"cells": len(grid.lats) * len(grid.lons), "fetches": grid.fetches, "missing": grid.missing_cells,
@@ -421,7 +439,9 @@ def route_yacht(conn, cfg, client, y, start, t0, dest, wind_provider, hours_gues
         r["course_under_models"] = []
         for name, g in zip(grid.names, grid.grids):
             ev = sail_track(_MemberView(g, marine), r["track"], t0, y.speed_table or "cruiser27", y.polar_factor,
-                            maneuver_min=kw.get("maneuver_min", 3.0))
+                            maneuver_min=kw.get("maneuver_min", 3.0),
+                            motor_wind_below_kn=kw.get("motor_wind_below_kn"),
+                            motor_speed_kn=kw.get("motor_speed_kn", 7.0))
             r["course_under_models"].append({"model": name, **ev})
         from .skill import weighted_median_time
 
@@ -459,7 +479,8 @@ class _MemberView:
 
 
 def sail_track(grid, track, t0: datetime, table, factor=1.0, maneuver_min=3.0, sub_nm=2.0,
-               use_waves=True, use_current=True, gybe_every_h=4.0) -> dict:
+               use_waves=True, use_current=True, gybe_every_h=4.0, motor_wind_below_kn=None,
+               motor_speed_kn=7.0) -> dict:
     """Sail a fixed sequence of track points through a (different) forecast.
 
     Each leg keeps its line; speed along it comes from the polar for that forecast's wind,
@@ -491,6 +512,8 @@ def sail_track(grid, track, t0: datetime, table, factor=1.0, maneuver_min=3.0, s
                 maneuvers += 1
             last_side = side
             stw, mode = table_speed_mode(w["wind_speed_kn"], abs(twa_signed), table, factor)
+            if motor_wind_below_kn and w["wind_speed_kn"] < motor_wind_below_kn:
+                stw, mode = max(stw, motor_speed_kn), "motor"
             if use_waves:
                 stw *= wave_factor(w.get("wave_height_m"), w.get("wave_dir_from_deg"), brg, w.get("wave_period_s"))[0]
             sog = stw
