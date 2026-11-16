@@ -97,11 +97,11 @@ class WeatherGrid:
                     _time.sleep(wait + 1)
                     continue
                 self.missing_cells += 1
-                self.last_error = f"quota: {e}"[:160]
+                self.last_error = self.last_error or f"{provider}: quota: {e}"[:160]
                 return rows
             except FetchError as e:
                 self.missing_cells += 1
-                self.last_error = str(e)[:160]
+                self.last_error = self.last_error or f"{provider}: {e}"[:160]
                 return rows
         return self.conn.execute(
             "SELECT * FROM weather_cache WHERE provider=? AND kind=? AND cell_lat=? AND cell_lon=? "
