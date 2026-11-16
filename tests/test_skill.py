@@ -114,3 +114,26 @@ def test_stale_screenshot_fix_is_removed():
     assert gone == [("1", t2, t1)]
     assert [r[0] for r in conn.execute("SELECT provider_time_utc FROM ais_reports")] == [t1]
     assert conn.execute("SELECT status FROM ocr_files").fetchone()[0] == "review"
+
+
+def test_new_unreadable_screenshot_keeps_its_review_copy(tmp_path, monkeypatch, cfg):
+    from PIL import Image
+
+    from yachtspeed import ocr, screenshots
+
+    conn = connect(":memory:")
+    cfg.screenshots_url = "https://example.invalid/x?dl=0"
+
+    def fake_download(url, dest):
+        p = dest / "Screenshot 2026-11-16 at 07.00.20.png"
+        Image.new("RGB", (40, 30), (200, 200, 200)).save(p)
+        return [p]
+
+    monkeypatch.setattr(screenshots, "download", fake_download)
+    monkeypatch.setattr(ocr, "available", lambda: True)
+    monkeypatch.setattr(ocr, "read_screenshot", lambda path, names: ocr.OcrFix(file=path, status="review"))
+    monkeypatch.setattr(screenshots.manual_files, "__defaults__", (tmp_path / "none.csv",))
+    rd = tmp_path / "review"
+    st = screenshots.run(conn, cfg, review_dir=rd)
+    assert st["review"] == 1
+    assert (rd / "Screenshot 2026-11-16 at 07.00.20.jpg").exists()

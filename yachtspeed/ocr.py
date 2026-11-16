@@ -17,7 +17,8 @@ import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
-FNAME_RE = re.compile(r"(\d{4}-\d{2}-\d{2})[ _T]?(\d{2})[:.]?(\d{2})\s*(.*?)\.(png|jpe?g|webp)$", re.I)
+FNAME_RE = re.compile(r"(\d{4}-\d{2}-\d{2})(?:\s+at\s+|[ _T]?)(\d{2})[:.]?(\d{2})(?:[:.]\d{2})?\s*(.*?)\.(png|jpe?g|webp)$",
+                      re.I)  # "2026-11-15 1000 Alibi.png" or macOS "Screenshot 2026-11-16 at 07.00.20.png" (UK time = UTC in winter)
 MONTHS = {m: i for i, m in enumerate(["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov",
                                       "dec"], 1)}
 

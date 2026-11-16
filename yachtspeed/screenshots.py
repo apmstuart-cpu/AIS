@@ -173,6 +173,7 @@ def run(conn, cfg, review_dir: Path = REVIEW_DIR) -> dict:
                     stats["stored"] += stored
             else:
                 stats["review"] += 1
+                pending.add(p.name)  # keep its review copy at the clean-up below
                 if p.name not in manual:
                     try:
                         _review_copy(p, review_dir)
