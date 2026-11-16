@@ -114,8 +114,43 @@ _OYSTER885_STD = _derive(
            "-5% at 52-60 deg tapering to -1% from 110 deg (keel difference; judgement)",
 )
 
+def _derive_by_wind(base, scale_by_tws, source):
+    """A sister-ship variant scaled by true wind speed (same angles), e.g. a smaller rig that
+    costs most in light air and little once both boats are powered up."""
+    pts = sorted(scale_by_tws)
+
+    def scale(w):
+        if w <= pts[0]:
+            return scale_by_tws[pts[0]]
+        if w >= pts[-1]:
+            return scale_by_tws[pts[-1]]
+        for x, y in zip(pts, pts[1:]):
+            if x <= w <= y:
+                return scale_by_tws[x] + (scale_by_tws[y] - scale_by_tws[x]) * (w - x) / (y - x)
+
+    f = [scale(w) for w in base["tws"]]
+    out = {k: v for k, v in base.items() if k not in ("speeds", "beat_vmg", "run_vmg", "source")}
+    out["speeds"] = {a: [round(v * k, 3) for v, k in zip(vals, f)] for a, vals in base["speeds"].items()}
+    out["beat_vmg"] = [round(v * k, 3) for v, k in zip(base["beat_vmg"], f)]
+    out["run_vmg"] = [round(v * k, 3) for v, k in zip(base["run_vmg"], f)]
+    out["source"] = source
+    return out
+
+
+# SORCERESS (SW96 #01, 2017): same hull and waterline as LIBERTY SQUARED (#05) but a shorter,
+# standard rig (about 470 m2 upwind, estimated from her ORC sail-area/displacement ratio, vs
+# LIBERTY's measured 540 m2). Their ORC superyacht light-air ratings, 487.8 vs 470.6 s/nm,
+# put LIBERTY 3.7 % faster in light air; the gap is assumed to shrink as both boats power up
+# (reefed or near hull speed). The taper above 8 kn is a JUDGEMENT; calibrate from her track.
+_SW96_SORCERESS = _derive_by_wind(
+    _ORC_SW96,
+    {8: 0.963, 10: 0.968, 12: 0.975, 14: 0.980, 16: 0.985, 20: 0.990},
+    source="derived from SW96 LIBERTY SQUARED ORC VPP: -3.7 % up to 8 kn (ORC light-air ratings "
+           "487.8 vs 470.6 s/nm), tapering to -1 % at 20 kn (smaller rig; taper is judgement)",
+)
+
 TABLES = {"cruiser27": _CRUISER27, "oyster885gt_orc": _ORC_885GT, "oyster885_std": _OYSTER885_STD,
-          "sw96_orc": _ORC_SW96}
+          "sw96_orc": _ORC_SW96, "sw96_sorceress": _SW96_SORCERESS}
 DEFAULT_TABLE = "cruiser27"
 
 

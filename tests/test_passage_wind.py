@@ -405,3 +405,11 @@ def test_recording_only_yacht_gets_no_forecast(conn, cfg, monkeypatch):
     r = rep["yachts"][0]
     assert r["status"] == "recording only" and "models" not in r and "routed" not in r and r["fix"]
     assert "recording only" in report.markdown(rep)
+
+
+def test_sw96_sorceress_slower_in_light_air_than_liberty():
+    light = table_speed(8, 90, "sw96_sorceress") / table_speed(8, 90, "sw96_orc")
+    fresh = table_speed(20, 90, "sw96_sorceress") / table_speed(20, 90, "sw96_orc")
+    assert light == pytest.approx(0.963, abs=0.002)
+    assert fresh == pytest.approx(0.990, abs=0.002)
+    assert table_speed(12, 140, "sw96_sorceress") > table_speed(12, 140, "oyster885_std")
