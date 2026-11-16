@@ -136,8 +136,14 @@ def run(conn, cfg, y, start, dest, depart: datetime, deadline: datetime, years, 
     def save():
         out["updated_utc"] = iso(utcnow())
         out["summary"] = summarise(out["results"], allow_h)
-        if out_path:
+        if out_path:  # results so far, so progress is visible in the published report
             Path(out_path).write_text(json.dumps(out, indent=1))
+            base = str(out_path)[:-5] if str(out_path).endswith(".json") else str(out_path)
+            Path(base + ".md").write_text(markdown(out))
+            try:
+                tracks_jpeg(base + ".jpg", out)
+            except Exception as e:  # a chart failure must not stop the run
+                log(logger, logging.WARNING, "climate_chart_failed", error=str(e)[:120])
 
     for yr in years:
         if yr in done_years:
