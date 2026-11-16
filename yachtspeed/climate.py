@@ -585,7 +585,7 @@ def markdown(out) -> str:
                      if s.get("probability_enso_weighted") is not None else "")
                   + f"Passage time: median {s['days_median']} days (10-90 %: {s['days_p10']}-{s['days_p90']}); "
                   f"median {s['sailed_nm_median']} nm sailed, {s['motor_hours_median']} h motoring.", "",
-                  "| Year | ENSO (Oct-Dec ONI) | Weight | Arrives | Days | On time | Margin (h) | Sailed nm | Avg kn | Motor h | Median wind kn | Furthest south |",
+                  "| Year | ENSO (Oct-Dec ONI) | Weight | Arrives (this year) | Days | On time | Margin (h) | Sailed nm | Avg kn | Motor h | Median wind kn | Furthest south |",
                   "|---|---|---|---|---|---|---|---|---|---|---|---|"]
         for r in sorted(out["results"], key=lambda r: r["year"]):
             e = ey.get(str(r["year"]), {})
@@ -594,7 +594,9 @@ def markdown(out) -> str:
             if r.get("status") != "ok":
                 lines.append(f"| {r['year']} | {ens} | {wt} | {r.get('status')} | | {'no' if r.get('status') == 'no_route' else '-'} | | | | | | |")
                 continue
-            lines.append(f"| {r['year']} | {ens} | {wt} | {parse_iso(r['eta']):%a %d %b %H:%M} | {r['days']} | "
+            dep = parse_iso(out["depart"])
+            eta_now = parse_iso(r["eta"]) + (dep - dep.replace(year=r["year"]))  # on this year's calendar
+            lines.append(f"| {r['year']} | {ens} | {wt} | {eta_now:%a %d %b %H:%M} | {r['days']} | "
                          f"{'yes' if r['on_time'] else 'no'} | {r['margin_h']:+} | {r['sailed_nm']} | {r['avg_kn']} | "
                          f"{r['motor_hours']} | {r['wind_median_kn']} | {r['southmost_lat']}N |")
     return "\n".join(lines) + "\n"
