@@ -250,10 +250,41 @@ def progress(conn, cfg, client, y, now=None, hours=72) -> dict:
         try:
             p24 = polar_evidence(conn, cfg, client, y, since=iso(now - timedelta(hours=24)))
             if p24 and p24.get("fixes"):
-                out["polar_24h"] = {"median_pct": p24["median_pct"], "fixes": p24["fixes"], "table": y.speed_table}
+                out["polar_24h"] = {"median_pct": p24["median_pct"], "fixes": p24["fixes"], "table": y.speed_table,
+                                    "skipped": p24.get("approach_fixes_skipped", 0)}
         except Exception as e:  # weather unavailable must not stop the report
             out["polar_24h"] = {"error": f"{type(e).__name__}"[:60]}
     return out
+
+
+APPROACH_EXCLUDE_H = 12.0  # boats often slow on purpose before arriving (daylight, moorings): not polar evidence
+
+
+def arrival_times(conn, y, arrived_nm=ARRIVED_NM):
+    """Times the yacht arrived at her configured destination: the first stopped fix (< 1.5 kn) within
+    `arrived_nm` after being away from it."""
+    from .speedtable import parse_destination
+
+    if not y.destination:
+        return []
+    try:
+        dest = parse_destination(y.destination)[1]
+    except KeyError:
+        return []
+    out, away = [], True
+    for r in conn.execute("SELECT provider_time_utc, lat, lon, sog_kn FROM ais_reports WHERE mmsi=? "
+                          "ORDER BY provider_time_utc", (y.mmsi,)):
+        near = haversine_nm(r["lat"], r["lon"], *dest) <= arrived_nm
+        if near and away and (r["sog_kn"] or 0) < 1.5:
+            out.append(parse_iso(r["provider_time_utc"]))
+            away = False
+        elif not near:
+            away = True
+    return out
+
+
+def in_final_approach(t, arrivals, hours=APPROACH_EXCLUDE_H):
+    return any(timedelta(0) <= a - t <= timedelta(hours=hours) for a in arrivals)
 
 
 def polar_evidence(conn, cfg, client, y, since=None) -> dict | None:
@@ -266,12 +297,16 @@ def polar_evidence(conn, cfg, client, y, since=None) -> dict | None:
         return None
     q = ("SELECT provider_time_utc, lat, lon, sog_kn, cog_deg FROM ais_reports WHERE mmsi=? AND sog_kn >= 2 "
          "AND cog_deg IS NOT NULL" + (" AND provider_time_utc >= ?" if since else "") + " ORDER BY provider_time_utc")
-    ratios, last_t = [], None
+    ratios, last_t, skipped = [], None, 0
+    arrivals = arrival_times(conn, y)
     for r in conn.execute(q, (y.mmsi, since) if since else (y.mmsi,)).fetchall():
         t = parse_iso(r["provider_time_utc"])
         if last_t is not None and (t - last_t).total_seconds() < 600:
             continue  # the same fix recorded from two sources (e.g. add-fix and the screenshot log)
         last_t = t
+        if in_final_approach(t, arrivals):
+            skipped += 1  # the last hours before arriving: often slowed on purpose
+            continue
         try:
             wx, _, _ = point_weather(conn, client, cfg, r["lat"], r["lon"], parse_iso(r["provider_time_utc"]))
         except FetchError:
@@ -285,8 +320,8 @@ def polar_evidence(conn, cfg, client, y, since=None) -> dict | None:
         if polar > 0.5:
             ratios.append((r["sog_kn"] - cur) / polar)
     if not ratios:
-        return {"fixes": 0}
-    return {"fixes": len(ratios), "median_pct": round(100 * statistics.median(ratios)),
+        return {"fixes": 0, "approach_fixes_skipped": skipped}
+    return {"fixes": len(ratios), "approach_fixes_skipped": skipped, "median_pct": round(100 * statistics.median(ratios)),
             "p25_pct": round(100 * sorted(ratios)[len(ratios) // 4]),
             "p75_pct": round(100 * sorted(ratios)[(3 * len(ratios)) // 4]),
             "configured_factor_pct": round(100 * y.polar_factor), "table": y.speed_table}
@@ -389,7 +424,9 @@ def markdown(rep: dict) -> str:
         if p and p.get("fixes"):
             lines.append(f"\nPolar evidence: median **{p['median_pct']}%** of {p['table']} "
                          f"(IQR {p['p25_pct']}–{p['p75_pct']}%) over {p['fixes']} fixes; "
-                         f"configured {p['configured_factor_pct']}%.")
+                         f"configured {p['configured_factor_pct']}%"
+                         + (f"; {p['approach_fixes_skipped']} fixes in the last 12 h before arrival left out"
+                            if p.get("approach_fixes_skipped") else "") + ".")
         lines.append("")
     prog = [y for y in rep["yachts"] if (y.get("progress") or {}).get("windows")]
     if prog:
@@ -409,7 +446,9 @@ def markdown(rep: dict) -> str:
             daily = ", ".join(f"{parse_iso(d['day'] + 'T00:00:00Z'):%a %d} {d['sailed_nm']} nm "
                               f"({d['hours_covered']} h, {d['avg_kn']} kn)" for d in pr["daily"])
             pol = pr.get("polar_24h") or {}
-            pol_s = (f"; last 24 h at **{pol['median_pct']}%** of {pol['table']} ({pol['fixes']} fixes)"
+            pol_s = (f"; last 24 h at **{pol['median_pct']}%** of {pol['table']} ({pol['fixes']} fixes"
+                     + (f", {pol['skipped']} in the final 12 h before arrival left out" if pol.get("skipped") else "")
+                     + ")"
                      if pol.get("median_pct") is not None else "; no polar configured" if not y.get("polar") else "")
             src = ", ".join(f"{k} {v}" for k, v in pr["sources"].items())
             pcs = "; ".join(f"{c['port']} arr {t(c['arrival_utc']) if c['arrival_utc'] else '?'}, "

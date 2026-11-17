@@ -148,3 +148,21 @@ def test_parse_port_calls_from_app_text():
     assert [c["port"] for c in pc] == ["GIBRALTAR WEST ANCH, GI", "ALCAIDESA, ES"]
     assert pc[0]["departure_utc"] == datetime(2026, 11, 13, 8, 7, tzinfo=timezone.utc)
     assert pc[1]["departure_utc"] is None
+
+
+def test_final_approach_is_left_out_of_polar_evidence():
+    from yachtspeed import report
+    from yachtspeed.config import Yacht
+
+    conn = connect(":memory:")
+    y = Yacht(name="X", mmsi="1", destination="rubicon")
+    rows = [("2026-11-16T12:00:00Z", 30.0, -12.0, 8.0), ("2026-11-17T00:00:00Z", 29.2, -13.4, 4.0),
+            ("2026-11-17T09:24:00Z", 28.857, -13.817, 0.0)]
+    for t, la, lo, sog in rows:
+        conn.execute("INSERT INTO ais_reports(mmsi, source, bucket_utc, provider_time_utc, ingested_utc, lat, lon, sog_kn) "
+                     "VALUES ('1','t',?,?,?,?,?,?)", (t, t, t, la, lo, sog))
+    arr = report.arrival_times(conn, y)
+    assert [a.isoformat()[:16] for a in arr] == ["2026-11-17T09:24"]
+    from yachtspeed.geo import parse_iso
+    assert report.in_final_approach(parse_iso("2026-11-17T00:00:00Z"), arr)        # 9.4 h before: left out
+    assert not report.in_final_approach(parse_iso("2026-11-16T12:00:00Z"), arr)    # 21 h before: kept

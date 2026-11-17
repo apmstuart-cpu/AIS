@@ -484,6 +484,14 @@ def cmd_polar_check(cfg, a):
                                        "ORDER BY provider_time_utc", (mmsi,))]
         if a.since:
             fixes = [r for r in fixes if r["timestamp_utc"] >= a.since]
+    if y is not None and not a.include_approach:  # the last 12 h before arriving: often slowed on purpose
+        from .report import arrival_times, in_final_approach
+
+        arr = arrival_times(conn, y)
+        n0 = len(fixes)
+        fixes = [r for r in fixes if not in_final_approach(parse_iso(r["timestamp_utc"]), arr)]
+        if n0 != len(fixes):
+            print(f"  ({n0 - len(fixes)} fixes in the last 12 h before arriving left out; --include-approach keeps them)")
     last_t = None
     for r in fixes:
         t_fix = parse_iso(r["timestamp_utc"])
@@ -913,6 +921,8 @@ def build_parser():
     s.add_argument("--since", help="ISO date: only fixes from this time (database mode)")
     s.add_argument("--speed-table")
     s.add_argument("--min-sog", type=float, default=2.0)
+    s.add_argument("--include-approach", action="store_true",
+                   help="keep fixes from the last 12 h before arriving (left out by default)")
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_polar_check)
     s = sub.add_parser("route", help="isochrone-routed ETA: fastest track through the forecast using the polar")
