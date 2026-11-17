@@ -883,6 +883,40 @@ def run_strategies(conn, cfg, y, start, dest, depart, deadline, years, res=2.5, 
     return out
 
 
+def typical_run(results, every_h=12.0):
+    """The run whose track stays closest, on average, to all the others (positions compared every
+    `every_h` hours from departure): a better 'suggested route' than the median-time run, which can be
+    an outlier in a different part of the ocean."""
+    from .geo import haversine_nm
+
+    ok = [r for r in results if r.get("status") == "ok" and r.get("track")]
+    if len(ok) < 3:
+        return sorted(ok, key=lambda r: r["days"])[len(ok) // 2] if ok else None
+
+    def pos(track, h):
+        t0 = parse_iso(track[0][0])
+        prev = None
+        for p in track:
+            dt = (parse_iso(p[0]) - t0).total_seconds() / 3600
+            if dt >= h:
+                if prev is None:
+                    return p[1], p[2]
+                pdt = (parse_iso(prev[0]) - t0).total_seconds() / 3600
+                f = (h - pdt) / max(1e-6, dt - pdt)
+                return prev[1] + (p[1] - prev[1]) * f, prev[2] + (p[2] - prev[2]) * f
+            prev = p
+        return track[-1][1], track[-1][2]
+
+    hours = [every_h * i for i in range(int(min(r["days"] for r in ok) * 24 / every_h) + 1)]
+    P = [[pos(r["track"], h) for h in hours] for r in ok]
+    best, best_d = None, None
+    for i, r in enumerate(ok):
+        d = sum(haversine_nm(*P[i][k], *P[j][k]) for j in range(len(ok)) if j != i for k in range(len(hours)))
+        if best_d is None or d < best_d:
+            best, best_d = r, d
+    return best
+
+
 def strategies_markdown(out) -> str:
     st = out["settings"]
     lines = [f"# {out['yacht']}: routing strategies", "",
@@ -948,10 +982,9 @@ def strategies_jpeg(path, out, width=1800):
     for k, r in allr:
         col = STRATEGY_COLOURS.get(k, (90, 90, 90))
         d.line([xy(p[1], p[2]) for p in r["track"]], fill=col, width=1)
-    for k, v in out["strategies"].items():  # the median-time run of each strategy, drawn bold
-        ok = sorted((r for r in v["results"] if r.get("status") == "ok"), key=lambda r: r["days"])
-        if ok:
-            med = ok[len(ok) // 2]
+    for k, v in out["strategies"].items():  # the most typical run of each strategy, drawn bold
+        med = typical_run(v["results"])
+        if med:
             d.line([xy(p[1], p[2]) for p in med["track"]], fill=STRATEGY_COLOURS.get(k, (90, 90, 90)), width=5)
     for la, lo in (out["from"], out["to"]):
         x, yy = xy(la, lo)

@@ -223,3 +223,14 @@ def test_strategies_compare_routes_in_forecast_and_past_weather(tmp_path, monkey
     a, e = out["strategies"]["A"]["history"][0], out["strategies"]["E"]["history"][0]
     assert e["motor_hours"] <= 52 and e["sailing_pct"] >= a["sailing_pct"]
     assert (tmp_path / "st.jpg").exists()
+
+
+def test_typical_run_ignores_a_southern_outlier():
+    def run(days, lat_shift):
+        t0 = datetime(2026, 11, 20, 10, tzinfo=timezone.utc)
+        return {"status": "ok", "days": days,
+                "track": [[(t0 + timedelta(hours=6 * i)).strftime("%Y-%m-%dT%H:%M:%SZ"), 29 - 0.2 * i + lat_shift,
+                           -14 - 0.9 * i, False] for i in range(50)]}
+
+    runs = [run(13.5, 0.0), run(13.6, 0.3), run(13.4, -0.2), run(13.0, -6.0), run(13.8, 0.1)]
+    assert climate.typical_run(runs)["days"] in (13.5, 13.8, 13.6)  # not the 13.0-day outlier

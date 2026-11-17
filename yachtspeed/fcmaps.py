@@ -36,7 +36,10 @@ def _font(size):
 
 
 def median_tracks(strategies_json, keys):
-    """{key: [(t, lat, lon)]} for the median-time forecast run of each chosen option."""
+    """{key: [(t, lat, lon)]} for the most typical forecast run of each chosen option (the run whose
+    track stays closest to the others; see climate.typical_run)."""
+    from .climate import typical_run
+
     out = {}
     if not strategies_json or not Path(strategies_json).exists():
         return out
@@ -45,9 +48,8 @@ def median_tracks(strategies_json, keys):
         v = (o.get("strategies") or {}).get(k)
         if not v:
             continue
-        ok = sorted((r for r in v.get("results", []) if r.get("status") == "ok"), key=lambda r: r["days"])
-        if ok:
-            med = ok[len(ok) // 2]
+        med = typical_run(v.get("results", []))
+        if med:
             out[k] = [(parse_iso(p[0]), p[1], p[2]) for p in med["track"]]
     return out
 
@@ -249,5 +251,5 @@ def assumptions_md(info, cfg, strategies_json=None, climate_json=None) -> str:
               "- **Current:** mean surface current for these dates over 2022-2025.",
               "- **Not modelled:** squalls, gusts, crew fatigue, breakages, sail changes beyond the polar.",
               "", f"Wind maps: every 3 h for the first 4 days, area {info.get('bbox')}, colours by wind strength, "
-              "arrows downwind; the coloured dots are the median routed course of each option at that hour."]
+              "arrows downwind; the coloured dots are each option's most typical routed course at that hour."]
     return "\n".join(lines) + "\n"
