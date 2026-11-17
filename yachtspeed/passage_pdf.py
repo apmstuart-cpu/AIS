@@ -3,7 +3,7 @@ rebuilt whenever the reruns change:
 
     python -m yachtspeed.passage_pdf <folder with climate_* files> <out.pdf>
 
-The folder needs climate_<name>.json / _80.json / _75.json, climate_<strategies>.json and .jpg, and
+The folder needs climate_<name>.json and _80.json, climate_<strategies>.json and .jpg, and
 optionally climate_<maps>_day1..4.jpg and climate_<maps>_assumptions.md. Every figure is read from the
 JSON; nothing is hard-coded.
 """
@@ -80,7 +80,6 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
     folder = Path(folder)
     c85 = _load(folder, f"climate_{name}.json")
     c80 = _load(folder, f"climate_{name}_80.json")
-    c75 = _load(folder, f"climate_{name}_75.json")
     st = _load(folder, f"climate_{strategies}.json")
     if not c85 or not st:
         raise SystemExit("need climate_<name>.json and climate_<strategies>.json")
@@ -163,7 +162,7 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
     # ---- 2. polar sensitivity
     rows = [["Polar", "Forecast median", "Forecast 10-90 %", "Past weather median", "Past 10-90 %", "Slowest year",
              "Smallest margin", "On time"]]
-    for lab, cj in (("85 %", c85), ("80 %", c80), ("75 %", c75)):
+    for lab, cj in (("85 %", c85), ("80 %", c80)):
         if not cj:
             continue
         f_ = (cj.get("forecast") or {}).get("summary") or {}
@@ -174,7 +173,7 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
                      f"{slow['margin_h']} h", f"{h_['on_time']}/{h_['years']}"])
     story += [Paragraph("How much the boat's pace matters (percentage of the Oyster 885 polar)", H2),
               Paragraph("ALIBI's logged history averages about 84% of polar overall and 79-82% broad reaching in the "
-                        "trades, so 80-85% is the realistic band; 75% is a stress test.", P), Spacer(1, 2 * mm),
+                        "trades, so 80-85% is the realistic band.", P), Spacer(1, 2 * mm),
               table(rows), PageBreak()]
 
     # ---- 3. how the model works
@@ -191,18 +190,18 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
         f"passage, with each past year's ERA5 weather taking over, giving {len(yrs)} possible passages. "
         "<br/><b>Sea and current.</b> ERA5 ocean waves for past years (wind-derived seas in the forecast); following "
         "seas add up to 3% for surfing, head and beam seas slow her. Mean surface current 2022-2025 for these dates."
-        "<br/><b>Caution comes last.</b> Every run is a best estimate; the caution is in the choice of polar (85/80/75%) "
+        "<br/><b>Caution comes last.</b> Every run is a best estimate; the caution is in the choice of polar (85% or 80%) "
         "and in reading the slowest years, not stacked inside the model.", P)]
 
     # ---- 4. El Nino
-    rows = [["Year", "ENSO (Oct-Dec ONI)", "Weight", "Days at 85 %", "Days at 80 %", "Days at 75 %", "Margin at 85 %",
+    rows = [["Year", "ENSO (Oct-Dec ONI)", "Weight", "Days at 85 %", "Days at 80 %", "Margin at 85 %",
              "Motor h", "Furthest south"]]
-    by = {lab: {r["year"]: r for r in (cj or {}).get("results", [])} for lab, cj in (("85", c85), ("80", c80), ("75", c75))}
+    by = {lab: {r["year"]: r for r in (cj or {}).get("results", [])} for lab, cj in (("85", c85), ("80", c80))}
     for y in yrs:
         r = by["85"][y]
         e = ey.get(str(y)) or {}
         rows.append([f"<b>{y}</b>" if (e.get("weight") or 0) >= 0.5 else y, f"{e.get('phase', '')} ({e.get('oni')})",
-                     e.get("weight"), r.get("days"), (by["80"].get(y) or {}).get("days"), (by["75"].get(y) or {}).get("days"),
+                     e.get("weight"), r.get("days"), (by["80"].get(y) or {}).get("days"), 
                      f"{r.get('margin_h')} h", r.get("motor_hours"), r.get("southmost_lat")])
     top = sorted(ey.items(), key=lambda kv: -(kv[1].get("weight") or 0))[:3]
     story += [Paragraph("El Niño and the past years", H2), Paragraph(
