@@ -182,6 +182,8 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
         mk, mw = f"{mk}".replace(".", ","), f"{mw}".replace(".", ",")
     pct = round(100 * (hs.get("probability_enso_weighted") or 0))
     story += [Paragraph(f"{c85['yacht']}: " + T("Rubicón to English Harbour, Antigua", "de Rubicón a English Harbour, Antigua"), H1),
+              Paragraph("<b>Shirley Heights waits for no man...</b>", ParagraphStyle("tag", parent=P, fontSize=12,
+                                                                                    leading=15, spaceAfter=4)),
               Paragraph(T(f"Passage model and routing options. Forecast issued {when(st['issued_utc'])}; built {built} UTC.",
                           f"Modelo de travesía y opciones de ruta. Previsión emitida el {when(st['issued_utc'])}; "
                           f"elaborado el {built} UTC."), S), Spacer(1, 4 * mm),
