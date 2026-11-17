@@ -674,7 +674,7 @@ def cmd_climate_route(cfg, a):
                       forecast_models=[m.strip() for m in a.forecast_models.split(",") if m.strip()],
                       fade=(a.fade_from, a.fade_to), enso_sigma=a.enso_sigma, currents=not a.no_current,
                       fuel_note=fuel_note, per_model=not a.no_per_model, waves=not a.no_waves,
-                      real_waves=not a.wind_waves_only)
+                      real_waves=not a.wind_waves_only, forecast_only=a.forecast_only)
     (_P(str(base) + ".md")).write_text(climate.markdown(out))
     climate.tracks_jpeg(str(base) + ".jpg", out)
     print(climate.markdown(out))
@@ -947,6 +947,8 @@ def build_parser():
     s.add_argument("--no-current", action="store_true", help="leave out the ocean current")
     s.add_argument("--no-per-model", action="store_true", help="skip the runs with each model's own forecast")
     s.add_argument("--no-waves", action="store_true", help="leave out the sea state (surfing gain, sea losses)")
+    s.add_argument("--forecast-only", action="store_true",
+                   help="run only the live-forecast part, on the years of history already stored (no history downloads)")
     s.add_argument("--wind-waves-only", action="store_true",
                    help="derive the sea from the wind only (no ERA5 wave downloads)")
     s.set_defaults(fn=cmd_climate_route)

@@ -128,3 +128,37 @@ def test_sea_from_wind_gives_a_following_sea_gain():
     assert 2.3 < w["wave_height_m"] < 2.9 and w["wave_dir_from_deg"] == 60.0
     assert wave_factor(w["wave_height_m"], w["wave_dir_from_deg"], 240.0, w["wave_period_s"])[0] > 1.0  # running
     assert wave_factor(w["wave_height_m"], w["wave_dir_from_deg"], 60.0, w["wave_period_s"])[0] < 1.0  # into it
+
+
+def test_forecast_only_uses_stored_history_without_downloading(tmp_path, monkeypatch, cfg):
+    from yachtspeed.geo import utcnow
+
+    kinds = []
+
+    def fake_fetch(self, provider, kind, lat, lon, start, end):
+        kinds.append(provider)
+        if provider in ("om_marine", "om_era5_ocean"):
+            return []
+        t0 = datetime.fromisoformat(start + "T00:00:00+00:00")
+        n = int((datetime.fromisoformat(end + "T00:00:00+00:00") - t0).total_seconds() // 3600) + 24
+        trade = 16.0 if provider.startswith("om_model") else 14.0
+        return [{"time_utc": (t0 + timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M:00Z"), "wind_speed_kn": trade,
+                 "wind_dir_from_deg": 65.0, "wind_gust_kn": None, "grid_lat": lat, "grid_lon": lon} for h in range(n)]
+
+    monkeypatch.setattr(weather.OpenMeteo, "fetch", fake_fetch)
+    monkeypatch.setattr(climate, "oni_table", lambda conn=None: {("OND", 2021): -0.91, ("ASO", 2026): 2.46})
+    cfg.calls_per_minute = 100000
+    cfg.skill_weighting = False
+    conn = connect(":memory:")
+    y = Yacht(name="X", mmsi="1", speed_table="oyster885_std", polar_factor=0.85)
+    _, s = parse_destination("rubicon")
+    _, d = parse_destination("english-harbour")
+    dep = (utcnow() + timedelta(days=2)).replace(minute=0, second=0, microsecond=0)
+    climate.run(conn, cfg, y, s, d, dep, dep + timedelta(days=16, hours=18), [2021], res=5.0,
+                motor_wind_below_kn=10, motor_speed_kn=8, motor_max_h=60, real_waves=False)  # stores 2021
+    kinds.clear()
+    out = climate.run(conn, cfg, y, s, d, dep, dep + timedelta(days=16, hours=18), [2021, 2022], res=5.0,
+                      motor_wind_below_kn=10, motor_speed_kn=8, motor_max_h=60, forecast_models=["ecmwf"],
+                      forecast_only=True, out_path=str(tmp_path / "fo.json"))
+    assert "om_era5" not in kinds and out["years"] == [2021]
+    assert out["forecast"]["status"] == "complete" and len(out["forecast"]["results"]) == 1

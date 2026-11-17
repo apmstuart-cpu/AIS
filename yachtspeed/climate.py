@@ -419,7 +419,8 @@ def run(conn, cfg, y, start, dest, depart: datetime, deadline: datetime, years, 
         max_days=28, step_h=4.0, heading_step=5, motor_wind_below_kn=None, motor_speed_kn=7.0, motor_max_h=None,
         maneuver_min=3.0, per_day=2500, per_hour=1200, per_minute=120, wait=True, out_path=None,
         name="climate", forecast_models=None, fade=(6.0, 12.0), enso_sigma=1.0, currents=True,
-        current_res=5.0, fuel_note=None, per_model=True, waves=True, real_waves=True) -> dict:
+        current_res=5.0, fuel_note=None, per_model=True, waves=True, real_waves=True,
+        forecast_only=False) -> dict:
     """Route `y` from `start` to `dest` leaving on `depart`'s month/day/time in each of `years`.
     `deadline` is in the same year as `depart`; the same interval is applied to every year."""
     from .land import mask_for_bbox
@@ -548,8 +549,14 @@ def run(conn, cfg, y, start, dest, depart: datetime, deadline: datetime, years, 
             on_time=res_y.get("on_time"), waves=res_y.get("waves"))
         save()
 
+    if forecast_only:  # only the years whose history is already stored; no history downloads
+        stored = {r[0]: r[1] for r in conn.execute(
+            "SELECT year, count(*) FROM climate_cells GROUP BY year")}
+        years = [yr for yr in years if stored.get(yr, 0) >= 0.9 * len(cells)]
+        out["years"] = years
+        out["status"] = f"forecast only, on the {len(years)} years of history stored so far"
     # pass 1: every year's wind and a first route (real waves where already stored, else from the wind)
-    for yr in years:
+    for yr in ([] if forecast_only else years):
         if yr in done_years:
             continue
         d0, t_end, s_date, e_date = window(yr)
@@ -557,7 +564,7 @@ def run(conn, cfg, y, start, dest, depart: datetime, deadline: datetime, years, 
             return out
         put(route_year(yr))
     # pass 2: real ERA5 ocean waves, then re-route the years that used the wind-derived sea
-    if real_waves and waves:
+    if real_waves and waves and not forecast_only:
         for yr in years:
             prev = next((r for r in out["results"] if r["year"] == yr), None)
             if prev and prev.get("waves") == "era5":
