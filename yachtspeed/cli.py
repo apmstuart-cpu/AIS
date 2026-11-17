@@ -852,7 +852,7 @@ def cmd_forecast_maps(cfg, a):
     _, start = parse_destination(a.frm)
     depart = _dt.fromisoformat(a.depart).astimezone(_tz.utc)
     info = fcmaps.build(conn, cfg, _client(conn, cfg), start, depart, a.out_dir, a.name, days=a.days,
-                        step_h=a.step_h, res=a.res, strategies_json=a.strategies,
+                        step_h=a.step_h, res=a.res or (1.0 if a.days <= 4 else 2.5), strategies_json=a.strategies,
                         keys=tuple(k.strip() for k in a.options.split(",") if k.strip()))
     md = fcmaps.assumptions_md(info, cfg, a.strategies, a.climate)
     (_P(a.out_dir) / f"climate_{a.name}_assumptions.md").write_text(md)
@@ -1170,7 +1170,7 @@ def build_parser():
     s.add_argument("--depart", required=True)
     s.add_argument("--days", type=int, default=4)
     s.add_argument("--step-h", type=int, default=3)
-    s.add_argument("--res", type=float, default=1.0)
+    s.add_argument("--res", type=float, default=None, help="grid degrees (default 1 up to 4 days, else 2.5)")
     s.add_argument("--strategies", default="/var/lib/yachtspeed/report/climate_alibi_strategies.json")
     s.add_argument("--climate", default="/var/lib/yachtspeed/report/climate_alibi_antigua.json")
     s.add_argument("--options", default="A,B,C,D", help="which options' routes to draw")

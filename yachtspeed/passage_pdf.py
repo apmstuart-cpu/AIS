@@ -442,7 +442,19 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
     for i, p in enumerate(days):
         story += [Paragraph(T(f"Appendix B{i + 1}: forecast wind, day {i + 1}",
                               f"Anexo B{i + 1}: viento previsto, día {i + 1}"), H2),
-                  Paragraph(T("Skill-weighted blend of the four models every 3 h. Colours: wind strength (scale at the "
+                  Paragraph(T("<b>These maps are drawn by our own model from its skill-weighted blend of the ECMWF, "
+                              "AIFS, GFS and ICON forecasts. They are not taken from Windy.</b>",
+                              "<b>Estos mapas los dibuja nuestro propio modelo a partir de su combinación de las "
+                              "previsiones ECMWF, AIFS, GFS e ICON, ponderada por su precisión. No proceden de "
+                              "Windy.</b>"), P), Spacer(1, 1 * mm)]
+        if i >= 7:
+            story.append(Paragraph(T("<b>Beyond about 7 days any forecast is much less reliable.</b> The routes "
+                                     "themselves lean more and more on past years' weather from day 2 onwards "
+                                     "(see Appendix A).",
+                                     "<b>Más allá de unos 7 días cualquier previsión es mucho menos fiable.</b> Las "
+                                     "rutas se apoyan cada vez más en el tiempo de años anteriores a partir del día 2 "
+                                     "(véase el anexo A)."), S))
+        story += [Paragraph(T("Skill-weighted blend of the four models every 3 h. Colours: wind strength (scale at the "
                             "top); white streaks flow with the wind; coloured lines and dots: each option's most "
                             "typical route and position at that hour (B is the traditional route south-west via "
                             "22N 30W; F goes via Cape Verde).",

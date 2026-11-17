@@ -294,14 +294,16 @@ def build(conn, cfg, client, start, depart: datetime, out_dir, name, days=4, ste
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     files = []
-    pw, ph = 880, 560
+    pw = 880  # panel height follows the map's shape, so a wide ocean area is not stretched
+    kx = math.cos(math.radians((bbox[0] + bbox[2]) / 2))
+    ph = max(360, min(700, int(pw * (bbox[2] - bbox[0]) / ((bbox[3] - bbox[1]) * kx)) + 34))
     for day in range(days):
         times = [depart + timedelta(days=day, hours=h) for h in range(0, 24, step_h)]
         cols, rows = 2, math.ceil(len(times) / 2)
         sheet = Image.new("RGB", (cols * pw + 30, rows * ph + 150), (24, 26, 34))
         dd = ImageDraw.Draw(sheet)
-        dd.text((15, 10), f"Forecast wind, day {day + 1} of the passage: {times[0]:%a %d %b} "
-                          f"(blend of {', '.join(used)}; drawn {iso(utcnow())[:16]}Z)", fill=(255, 255, 255),
+        dd.text((15, 10), f"Day {day + 1}, {times[0]:%a %d %b}: our model's forecast wind (skill-weighted blend of "
+                          f"{', '.join(used)}; not Windy). Drawn {iso(utcnow())[:16]}Z", fill=(255, 255, 255),
                 font=_font(26))
         sheet.paste(legend(cols * pw, tracks), (15, 48))
         for i, t in enumerate(times):
@@ -311,7 +313,7 @@ def build(conn, cfg, client, start, depart: datetime, out_dir, name, days=4, ste
         path = out / f"climate_{name}_day{day + 1}.jpg"
         sheet.save(path, "JPEG", quality=85, optimize=True)
         files.append(str(path))
-    return {"status": "ok", "files": files, "bbox": bbox, "models": used,
+    return {"status": "ok", "files": files, "bbox": bbox, "models": used, "days": days, "step_h": step_h,
             "weights": ({f"{n} d ahead": {m: round(100 * x) for m, x in w.items()} for n, w in weights.by_day.items()}
                         if weights is not None else None)}
 
@@ -363,6 +365,8 @@ def assumptions_md(info, cfg, strategies_json=None, climate_json=None) -> str:
               "add up to +3 % (surfing), head and beam seas slow her.",
               "- **Current:** mean surface current for these dates over 2022-2025.",
               "- **Not modelled:** squalls, gusts, crew fatigue, breakages, sail changes beyond the polar.",
-              "", f"Wind maps: every 3 h for the first 4 days, area {info.get('bbox')}, colours by wind strength, "
+              "", "**Wind maps: drawn by this model from its own skill-weighted forecast blend, not taken from Windy.** "
+              f"Every {info.get('step_h', 3)} h for the first {info.get('days', 4)} days, area {info.get('bbox')}, "
+              "colours by wind strength, "
               "white streaks flowing with the wind; the coloured dots are each option's most typical routed course at that hour."]
     return "\n".join(lines) + "\n"
