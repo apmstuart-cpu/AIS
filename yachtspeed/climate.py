@@ -165,12 +165,16 @@ def cells_for(bbox, res):
     return [(la, lo) for la in lats for lo in lons]
 
 
-def fetch_year(conn, client, year, cells, start_date, end_date, thin_h=3, progress=None) -> int:
-    """Fetch ERA5 wind for every cell not yet stored; raises QuotaExceeded when the budget is spent."""
+def fetch_year(conn, client, year, cells, start_date, end_date, thin_h=3, progress=None, enough=1.0) -> int:
+    """Fetch ERA5 wind for every cell not yet stored; raises QuotaExceeded when the budget is spent.
+    With `enough` < 1, a year that already has that share of its cells is left as it is (a few points
+    that failed to download are filled by interpolation rather than waiting for the next day's quota)."""
     conn.executescript(SQL)
     done = {(r[0], r[1]) for r in conn.execute(
         "SELECT cell_lat, cell_lon FROM climate_cells WHERE year=? AND start_date=? AND end_date=?",
         (year, start_date, end_date))}
+    if len(done) >= enough * len(cells) and enough < 1.0:
+        return 0
     n = 0
     for la, lo in cells:
         if (la, lo) in done:
@@ -291,12 +295,14 @@ def wave_bbox(bbox, res=WAVE_RES):
             math.ceil(bbox[2] / res) * res, math.ceil(bbox[3] / res) * res)
 
 
-def fetch_waves_year(conn, client, year, cells, start_date, end_date, thin_h=3):
+def fetch_waves_year(conn, client, year, cells, start_date, end_date, thin_h=3, enough=1.0):
     """ERA5 ocean waves (height, direction, period) per cell for one year; raises QuotaExceeded."""
     conn.executescript(SQL)
     done = {(round(r[0], 4), round(r[1], 4)) for r in conn.execute(
         "SELECT cell_lat, cell_lon FROM climate_wave_cells WHERE year=? AND start_date=? AND end_date=?",
         (year, start_date, end_date))}
+    if len(done) >= enough * len(cells) and enough < 1.0:
+        return
     for la, lo in cells:
         if (la, lo) in done:
             continue
@@ -320,7 +326,7 @@ def waves_complete(conn, year, cells, start_date, end_date):
     conn.executescript(SQL)
     n = conn.execute("SELECT count(*) FROM climate_wave_cells WHERE year=? AND start_date=? AND end_date=?",
                      (year, start_date, end_date)).fetchone()[0]
-    return n >= len(cells)
+    return n >= 0.9 * len(cells)
 
 
 class WaveField:
@@ -613,7 +619,7 @@ def run(conn, cfg, y, start, dest, depart: datetime, deadline: datetime, years, 
         if yr in done_years:
             continue
         d0, t_end, s_date, e_date = window(yr)
-        if not with_quota(lambda: fetch_year(conn, client, yr, cells, s_date, e_date), f"wind {yr}"):
+        if not with_quota(lambda: fetch_year(conn, client, yr, cells, s_date, e_date, enough=0.95), f"wind {yr}"):
             return out
         put(route_year(yr))
     # pass 2: real ERA5 ocean waves, then re-route the years that used the wind-derived sea
@@ -623,7 +629,8 @@ def run(conn, cfg, y, start, dest, depart: datetime, deadline: datetime, years, 
             if prev and prev.get("waves") == "era5":
                 continue
             d0, t_end, s_date, e_date = window(yr)
-            if not with_quota(lambda: fetch_waves_year(conn, client, yr, wcells, s_date, e_date), f"waves {yr}"):
+            if not with_quota(lambda: fetch_waves_year(conn, client, yr, wcells, s_date, e_date, enough=0.9),
+                              f"waves {yr}"):
                 return out
             put(route_year(yr))
     if forecast_models:
