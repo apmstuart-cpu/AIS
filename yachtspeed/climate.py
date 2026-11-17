@@ -743,6 +743,8 @@ DEFAULT_STRATEGIES = {
     "A": {"label": "fastest (router's choice)"},
     "B": {"label": "classic: south-west to 22N 30W first", "via": (22.0, -30.0)},
     "C": {"label": "fuel-saving: at most 30 h motoring in the first 72 h", "motor_early": (72.0, 30.0)},
+    "D": {"label": "more sailing: motor only below 6 kn of wind", "motor_below": 6.0},
+    "E": {"label": "mostly sailing: at most 48 h motoring in all", "motor_max_h": 48.0},
 }
 
 
@@ -769,6 +771,7 @@ def run_strategies(conn, cfg, y, start, dest, depart, deadline, years, res=2.5, 
            "settings": {"table": y.speed_table, "polar_factor": y.polar_factor, "motor_wind_below_kn": motor_wind_below_kn,
                         "motor_speed_kn": motor_speed_kn, "motor_max_h": motor_max_h, "burn_lph": burn_lph},
            "strategies": {k: {"label": v["label"], "via": v.get("via"), "motor_early": v.get("motor_early"),
+                              "motor_below": v.get("motor_below"), "motor_max_h": v.get("motor_max_h"),
                               "results": [], "history": []} for k, v in strategies.items()},
            "status": "running"}
     try:
@@ -782,6 +785,9 @@ def run_strategies(conn, cfg, y, start, dest, depart, deadline, years, res=2.5, 
         for v in out["strategies"].values():
             for key, src in (("summary", "results"), ("history_summary", "history")):
                 v[key] = summarise(v[src], allow_h, weights)
+                sail = [r["sailing_pct"] for r in v[src] if r.get("sailing_pct") is not None]
+                if sail:
+                    v[key]["sailing_pct_median"] = round(statistics.median(sail))
                 if burn_lph and v[key].get("motor_hours_median") is not None:
                     v[key]["fuel_l_median"] = round(v[key]["motor_hours_median"] * burn_lph)
         if out_path:
@@ -833,13 +839,16 @@ def run_strategies(conn, cfg, y, start, dest, depart, deadline, years, res=2.5, 
                   use_current=True, motor_wind_below_kn=motor_wind_below_kn, motor_speed_kn=motor_speed_kn)
         for key, st, (grid, t0, bucket) in [(k, v, b) for k, v in strategies.items()
                                              for b in ((fgrid, depart, "results"), (hgrid, d0, "history"))]:
+            kw["motor_wind_below_kn"] = st.get("motor_below", motor_wind_below_kn)
+            cap = motor_max_h if st.get("motor_max_h") is None else (
+                st["motor_max_h"] if motor_max_h is None else min(motor_max_h, st["motor_max_h"]))
             if st.get("via"):
                 r1 = route(grid, land, start, t0, st["via"], y.speed_table or "cruiser27", y.polar_factor,
-                           max_hours=max_days * 24, motor_max_h=motor_max_h, **kw)
+                           max_hours=max_days * 24, motor_max_h=cap, **kw)
                 if r1.get("status") != "ok":
                     r = r1
                 else:
-                    left = None if motor_max_h is None else max(0.0, motor_max_h - r1.get("motor_hours", 0.0))
+                    left = None if cap is None else max(0.0, cap - r1.get("motor_hours", 0.0))
                     t1 = parse_iso(r1["eta_utc"])
                     r2 = route(grid, land, tuple(st["via"]), t1, dest, y.speed_table or "cruiser27", y.polar_factor,
                                max_hours=max_days * 24 - r1["hours"], motor_max_h=left, **kw)
@@ -850,14 +859,16 @@ def run_strategies(conn, cfg, y, start, dest, depart, deadline, years, res=2.5, 
                         "track": r1["track"] + r2["track"][1:]}
             else:
                 r = route(grid, land, start, t0, dest, y.speed_table or "cruiser27", y.polar_factor,
-                          max_hours=max_days * 24, motor_max_h=motor_max_h, motor_early=st.get("motor_early"), **kw)
+                          max_hours=max_days * 24, motor_max_h=cap, motor_early=st.get("motor_early"), **kw)
             if r.get("status") != "ok":
                 res_y = {"year": yr, "status": "no_route", "on_time": False}
             else:
                 hrs = r["hours"]
                 res_y = {"year": yr, "status": "ok", "eta": r["eta_utc"], "days": round(hrs / 24, 2),
                          "on_time": hrs <= allow_h, "margin_h": round(allow_h - hrs, 1), "sailed_nm": r["sailed_nm"],
-                         "motor_hours": round(r.get("motor_hours", 0.0), 1), "track": _thin(r["track"])}
+                         "motor_hours": round(r.get("motor_hours", 0.0), 1),
+                         "sailing_pct": round(100 * (1 - r.get("motor_hours", 0.0) / hrs)) if hrs else None,
+                         "track": _thin(r["track"])}
             out["strategies"][key][bucket].append(res_y)
             log(logger, logging.INFO, "strategy_year", strategy=key, basis=bucket, year=yr, days=res_y.get("days"))
         save()
@@ -875,26 +886,26 @@ def strategies_markdown(out) -> str:
              f"{out.get('handover_day', ['?', '?'])[1]}. Polar {st['table']} x{st['polar_factor']}, motor at "
              f"{st['motor_speed_kn']} kn below {st['motor_wind_below_kn']} kn of wind, at most {st['motor_max_h']} h. "
              f"Status: {out['status']}.", "",
-             "| Strategy | On time | Probability | El Nino-weighted | Median days | 10-90 % days | Slowest | Median motoring | Median fuel |",
-             "|---|---|---|---|---|---|---|---|---|"]
+             "| Strategy | On time | Probability | El Nino-weighted | Median days | 10-90 % days | Slowest | Sailing | Median motoring | Median fuel |",
+             "|---|---|---|---|---|---|---|---|---|---|"]
     for k, v in out["strategies"].items():
         s = v.get("summary") or {}
         if not s.get("years"):
-            lines.append(f"| {k}: {v['label']} | - | | | | | | | |")
+            lines.append(f"| {k}: {v['label']} | - | | | | | | | | |")
             continue
         lines.append(f"| {k}: {v['label']} | {s['on_time']}/{s['years']} | {round(100 * s['probability'])}% | "
                      f"{round(100 * (s.get('probability_enso_weighted') or 0))}% | {s['days_median']} | "
-                     f"{s['days_p10']}-{s['days_p90']} | {s['days_max']} | {s['motor_hours_median']} h | "
-                     f"{s.get('fuel_l_median', '-')} L |")
+                     f"{s['days_p10']}-{s['days_p90']} | {s['days_max']} | {s.get('sailing_pct_median', '-')}% | "
+                     f"{s['motor_hours_median']} h | {s.get('fuel_l_median', '-')} L |")
     lines += ["", "## In past years' own weather (no forecast)", "",
-              "| Strategy | On time | Median days | 10-90 % days | Slowest | Median motoring | Median fuel |",
-              "|---|---|---|---|---|---|---|"]
+              "| Strategy | On time | Median days | 10-90 % days | Slowest | Sailing | Median motoring | Median fuel |",
+              "|---|---|---|---|---|---|---|---|"]
     for k, v in out["strategies"].items():
         s = v.get("history_summary") or {}
         if s.get("years"):
             lines.append(f"| {k}: {v['label']} | {s['on_time']}/{s['years']} | {s['days_median']} | "
-                         f"{s['days_p10']}-{s['days_p90']} | {s['days_max']} | {s['motor_hours_median']} h | "
-                         f"{s.get('fuel_l_median', '-')} L |")
+                         f"{s['days_p10']}-{s['days_p90']} | {s['days_max']} | {s.get('sailing_pct_median', '-')}% | "
+                         f"{s['motor_hours_median']} h | {s.get('fuel_l_median', '-')} L |")
     keys = list(out["strategies"])
     if "A" in keys and len(keys) > 1:
         byyear = {k: {r["year"]: r for r in out["strategies"][k]["history"] if r.get("status") == "ok"} for k in keys}
@@ -912,7 +923,8 @@ def strategies_markdown(out) -> str:
     return "\n".join(lines) + "\n"
 
 
-STRATEGY_COLOURS = {"A": (200, 40, 40), "B": (20, 90, 190), "C": (30, 140, 70)}
+STRATEGY_COLOURS = {"A": (200, 40, 40), "B": (20, 90, 190), "C": (30, 140, 70), "D": (210, 120, 0),
+                    "E": (120, 40, 150)}
 
 
 def strategies_jpeg(path, out, width=1800):

@@ -215,9 +215,11 @@ def test_strategies_compare_routes_in_forecast_and_past_weather(tmp_path, monkey
                                  motor_speed_kn=8.5, motor_max_h=60, burn_lph=15, models=("ecmwf",),
                                  out_path=str(tmp_path / "st.json"))
     assert out["status"] == "complete"
-    for k in ("A", "B", "C"):
+    for k in ("A", "B", "C", "D", "E"):
         assert out["strategies"][k]["results"] and out["strategies"][k]["history"]
         assert out["strategies"][k]["results"][0]["status"] == "ok"
     md = climate.strategies_markdown(out)
-    assert "Year by year in past weather" in md and "| 2021 |" in md and "B vs A" in md
+    assert "Year by year in past weather" in md and "| 2021 |" in md and "B vs A" in md and "E vs A" in md
+    a, e = out["strategies"]["A"]["history"][0], out["strategies"]["E"]["history"][0]
+    assert e["motor_hours"] <= 52 and e["sailing_pct"] >= a["sailing_pct"]
     assert (tmp_path / "st.jpg").exists()
