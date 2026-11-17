@@ -706,6 +706,42 @@ def cmd_climate_fetch(cfg, a):
     print(f"saved to {a.db}: copy it to the server and run `yachtspeed climate-merge <file>` there")
 
 
+def cmd_strategies(cfg, a):
+    """Compare routing strategies through the live forecast and past years (history must be stored)."""
+    from datetime import datetime as _dt, timezone as _tz
+    from pathlib import Path as _P
+
+    from . import climate
+    from .speedtable import parse_destination
+
+    conn = _conn(cfg)
+    mmsi = _mmsi(cfg, a.yacht)
+    y = next((y for y in cfg.fleet if y.mmsi == mmsi), None)
+    if y is None or not y.speed_table:
+        sys.exit("yacht not in config, or it has no speed_table (polar)")
+    if a.polar_factor is not None:
+        y.polar_factor = a.polar_factor
+    _, start = parse_destination(a.frm)
+    _, dest = parse_destination(a.to)
+    depart = _dt.fromisoformat(a.depart).astimezone(_tz.utc)
+    deadline = _dt.fromisoformat(a.by).astimezone(_tz.utc)
+    y0, y1 = (int(x) for x in a.years.split("-"))
+    motor_max_h = a.motor_max_h
+    if motor_max_h is None and a.fuel_l:
+        usable = a.fuel_l * (1 - a.fuel_reserve) - a.genset_lph * 24 * (deadline - depart).total_seconds() / 86400
+        motor_max_h = max(0.0, round(usable / a.burn_lph))
+    strategies = dict(climate.DEFAULT_STRATEGIES)
+    if a.via:
+        la, lo = (float(x) for x in a.via.split(","))
+        strategies["B"] = {"label": f"classic: south-west to {la:g}N {abs(lo):g}W first", "via": (la, lo)}
+    _P(a.out_dir).mkdir(parents=True, exist_ok=True)
+    out = climate.run_strategies(conn, cfg, y, start, dest, depart, deadline, list(range(y0, y1 + 1)),
+                                 motor_wind_below_kn=a.motor_below, motor_speed_kn=a.motor_speed,
+                                 motor_max_h=motor_max_h, strategies=strategies, burn_lph=a.burn_lph,
+                                 out_path=str(_P(a.out_dir) / f"climate_{a.name}.json"))
+    print(climate.strategies_markdown(out))
+
+
 def cmd_climate_merge(cfg, a):
     from . import climate
 
@@ -961,6 +997,25 @@ def build_parser():
     s.add_argument("--waves-only", action="store_true", help="only the ERA5 waves (wind already on the server)")
     s.add_argument("--max-calls-per-day", type=int, default=3000)
     s.set_defaults(fn=cmd_climate_fetch)
+    s = sub.add_parser("strategies", help="compare routing strategies (fastest / classic south / fuel-saving)")
+    s.add_argument("--yacht", required=True)
+    s.add_argument("--from", dest="frm", required=True)
+    s.add_argument("--to", required=True)
+    s.add_argument("--depart", required=True)
+    s.add_argument("--by", required=True)
+    s.add_argument("--years", default="2006-2025")
+    s.add_argument("--via", help="waypoint for the classic route, LAT,LON (default 22,-30)")
+    s.add_argument("--motor-below", type=float, default=None)
+    s.add_argument("--motor-speed", type=float, default=8.0)
+    s.add_argument("--motor-max-h", type=float, default=None)
+    s.add_argument("--fuel-l", type=float, default=None)
+    s.add_argument("--burn-lph", type=float, default=25.0)
+    s.add_argument("--genset-lph", type=float, default=2.0)
+    s.add_argument("--fuel-reserve", type=float, default=0.10)
+    s.add_argument("--polar-factor", type=float, default=None)
+    s.add_argument("--name", default="strategies")
+    s.add_argument("--out-dir", default="/var/lib/yachtspeed/report")
+    s.set_defaults(fn=cmd_strategies)
     s = sub.add_parser("climate-merge", help="add a climate-fetch file's history to this server's store")
     s.add_argument("file")
     s.set_defaults(fn=cmd_climate_merge)

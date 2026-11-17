@@ -251,7 +251,7 @@ def _move(lat, lon, ve_kn, vn_kn, hours):
 def route(grid: WeatherGrid, land, start, t0: datetime, dest, table, factor=1.0, step_h=1.0,
           heading_step=5, sector_deg=2.0, maneuver_min=3.0, max_hours=240, use_waves=True,
           use_current=True, arrive_nm=1.0, harbour_nm=2.0, motor_wind_below_kn=None,
-          motor_speed_kn=7.0, motor_max_h=None) -> dict:
+          motor_speed_kn=7.0, motor_max_h=None, motor_early=None) -> dict:
     """Isochrone routing. Returns dict with ETA, track and summary, or status 'no_route'."""
     s_lat, s_lon = start
     brg_sd = initial_bearing(s_lat, s_lon, *dest)
@@ -275,6 +275,11 @@ def route(grid: WeatherGrid, land, start, t0: datetime, dest, table, factor=1.0,
         motoring = bool(motor_wind_below_kn) and w["wind_speed_kn"] < motor_wind_below_kn
         if motoring and motor_max_h is not None and node.extra.get("mh", 0.0) >= motor_max_h:
             motoring = False  # out of fuel: sail whatever the wind
+            if stw <= 0.2:
+                return None
+        if motoring and motor_early and (node.t - t0).total_seconds() / 3600 < motor_early[0] \
+                and node.extra.get("mh", 0.0) >= motor_early[1]:
+            motoring = False  # saving fuel: at most motor_early[1] h of motoring in the first motor_early[0] h
             if stw <= 0.2:
                 return None
         if motoring:  # light air: motor (or motor-sail if that is faster), any heading, no gybes

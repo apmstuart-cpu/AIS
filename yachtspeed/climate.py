@@ -739,6 +739,215 @@ def run_forecast(conn, cfg, y, start, dest, depart, bbox, res, land, years, allo
     return fc
 
 
+DEFAULT_STRATEGIES = {
+    "A": {"label": "fastest (router's choice)"},
+    "B": {"label": "classic: south-west to 22N 30W first", "via": (22.0, -30.0)},
+    "C": {"label": "fuel-saving: at most 30 h motoring in the first 72 h", "motor_early": (72.0, 30.0)},
+}
+
+
+def run_strategies(conn, cfg, y, start, dest, depart, deadline, years, res=2.5, margin=4.0, max_days=28, step_h=4.0,
+                   heading_step=5, maneuver_min=3.0, motor_wind_below_kn=None, motor_speed_kn=7.0, motor_max_h=None,
+                   models=("ecmwf", "aifs", "gfs", "icon"), fade=(6.0, 12.0), strategies=None, burn_lph=None,
+                   waves=True, out_path=None, enso_sigma=1.0) -> dict:
+    """Compare routing strategies through the live forecast (skill-weighted blend, handing over to each past
+    year's weather), using the history already stored. A waypoint strategy routes start -> waypoint -> destination,
+    carrying the remaining fuel into the second leg."""
+    from .land import mask_for_bbox
+    from .router import BlendGrid, grid_bbox
+    from .weather import model_provider
+
+    strategies = strategies or DEFAULT_STRATEGIES
+    conn.executescript(SQL)
+    bbox = grid_bbox(start, dest, res=res, margin=margin)
+    cells = cells_for(bbox, res)
+    land = mask_for_bbox(tuple(round(x, 3) for x in bbox))
+    allow_h = (deadline - depart).total_seconds() / 3600
+    now = utcnow()
+    out = {"name": "strategies", "yacht": y.name, "from": list(start), "to": list(dest), "depart": iso(depart),
+           "deadline": iso(deadline), "allowed_days": round(allow_h / 24, 2), "issued_utc": iso(now),
+           "settings": {"table": y.speed_table, "polar_factor": y.polar_factor, "motor_wind_below_kn": motor_wind_below_kn,
+                        "motor_speed_kn": motor_speed_kn, "motor_max_h": motor_max_h, "burn_lph": burn_lph},
+           "strategies": {k: {"label": v["label"], "via": v.get("via"), "motor_early": v.get("motor_early"),
+                              "results": [], "history": []} for k, v in strategies.items()},
+           "status": "running"}
+    try:
+        cur, wts = enso_weights(oni_table(conn), years, sigma=enso_sigma)
+        weights = {k: v[1] for k, v in wts.items()}
+        out["enso_now"] = cur
+    except Exception:
+        weights = {}
+
+    def save():
+        for v in out["strategies"].values():
+            for key, src in (("summary", "results"), ("history_summary", "history")):
+                v[key] = summarise(v[src], allow_h, weights)
+                if burn_lph and v[key].get("motor_hours_median") is not None:
+                    v[key]["fuel_l_median"] = round(v[key]["motor_hours_median"] * burn_lph)
+        if out_path:
+            Path(out_path).write_text(json.dumps(out, indent=1))
+            base = str(out_path)[:-5]
+            Path(base + ".md").write_text(strategies_markdown(out))
+            try:
+                strategies_jpeg(base + ".jpg", out)
+            except Exception as e:
+                log(logger, logging.WARNING, "strategies_chart_failed", error=str(e)[:120])
+
+    f_end = min(depart + timedelta(days=max_days), now + timedelta(days=15))
+    client = OpenMeteo(Budget(conn, cfg.calls_per_minute, cfg.calls_per_hour, cfg.calls_per_day))
+    grids, used = [], []
+    for m in models:
+        g = WeatherGrid(conn, client, bbox, depart, f_end, model_provider(m), res=res, use_marine=False).load()
+        if len(g.wind) >= 0.9 * len(g.lats) * len(g.lons):
+            grids.append(g)
+            used.append(m)
+    if not grids:
+        out["status"] = "forecast unavailable (weather quota or API error)"
+        save()
+        return out
+    wobj = None
+    if getattr(cfg, "skill_weighting", False):
+        from .skill import Weights
+
+        wobj = Weights(conn, used, cfg.skill_window_days, cfg.skill_min_checks)
+    blend = BlendGrid(grids, used, wobj)
+    blend.data_end_h = max(g.data_end_h for g in grids)
+    fs, fe = fade_window(now, blend, depart, *fade)
+    out["models_used"] = used
+    out["handover_day"] = [round((fs - depart).total_seconds() / 86400, 1), round((fe - depart).total_seconds() / 86400, 1)]
+    md = depart.strftime("%m-%d")
+    cfield = CurrentField(conn, wave_bbox(bbox, 5.0), 5.0, md)
+    stored = {r[0]: r[1] for r in conn.execute("SELECT year, count(*) FROM climate_cells GROUP BY year")}
+    for yr in years:
+        if stored.get(yr, 0) < 0.9 * len(cells):
+            continue
+        d0 = depart.replace(year=yr)
+        clim = ClimateGrid(conn, yr, bbox, d0, d0 + timedelta(days=max_days), res).load()
+        s_date, e_date = d0.strftime("%Y-%m-%d"), (d0 + timedelta(days=max_days + 1)).strftime("%Y-%m-%d")
+        wcells = cells_for(wave_bbox(bbox), WAVE_RES)
+        wfield = WaveField(conn, yr, wave_bbox(bbox)) if waves_complete(conn, yr, wcells, s_date, e_date) else None
+        fgrid = sea(WithCurrent(HybridGrid(blend, clim, fs, fe, depart - d0), cfield), waves,
+                    (wfield, depart - d0, fe) if wfield is not None else None)
+        hgrid = sea(WithCurrent(clim, cfield), waves, (wfield, timedelta(0), None) if wfield is not None else None)
+        kw = dict(step_h=step_h, heading_step=heading_step, maneuver_min=maneuver_min, use_waves=waves,
+                  use_current=True, motor_wind_below_kn=motor_wind_below_kn, motor_speed_kn=motor_speed_kn)
+        for key, st, (grid, t0, bucket) in [(k, v, b) for k, v in strategies.items()
+                                             for b in ((fgrid, depart, "results"), (hgrid, d0, "history"))]:
+            if st.get("via"):
+                r1 = route(grid, land, start, t0, st["via"], y.speed_table or "cruiser27", y.polar_factor,
+                           max_hours=max_days * 24, motor_max_h=motor_max_h, **kw)
+                if r1.get("status") != "ok":
+                    r = r1
+                else:
+                    left = None if motor_max_h is None else max(0.0, motor_max_h - r1.get("motor_hours", 0.0))
+                    t1 = parse_iso(r1["eta_utc"])
+                    r2 = route(grid, land, tuple(st["via"]), t1, dest, y.speed_table or "cruiser27", y.polar_factor,
+                               max_hours=max_days * 24 - r1["hours"], motor_max_h=left, **kw)
+                    r = r2 if r2.get("status") != "ok" else {
+                        "status": "ok", "eta_utc": r2["eta_utc"], "hours": r1["hours"] + r2["hours"],
+                        "sailed_nm": round(r1["sailed_nm"] + r2["sailed_nm"], 1),
+                        "motor_hours": r1.get("motor_hours", 0.0) + r2.get("motor_hours", 0.0),
+                        "track": r1["track"] + r2["track"][1:]}
+            else:
+                r = route(grid, land, start, t0, dest, y.speed_table or "cruiser27", y.polar_factor,
+                          max_hours=max_days * 24, motor_max_h=motor_max_h, motor_early=st.get("motor_early"), **kw)
+            if r.get("status") != "ok":
+                res_y = {"year": yr, "status": "no_route", "on_time": False}
+            else:
+                hrs = r["hours"]
+                res_y = {"year": yr, "status": "ok", "eta": r["eta_utc"], "days": round(hrs / 24, 2),
+                         "on_time": hrs <= allow_h, "margin_h": round(allow_h - hrs, 1), "sailed_nm": r["sailed_nm"],
+                         "motor_hours": round(r.get("motor_hours", 0.0), 1), "track": _thin(r["track"])}
+            out["strategies"][key][bucket].append(res_y)
+            log(logger, logging.INFO, "strategy_year", strategy=key, basis=bucket, year=yr, days=res_y.get("days"))
+        save()
+    out["status"] = "complete"
+    save()
+    return out
+
+
+def strategies_markdown(out) -> str:
+    st = out["settings"]
+    lines = [f"# {out['yacht']}: routing strategies", "",
+             f"Leaving {parse_iso(out['depart']):%a %d %b %H:%M} UTC, deadline {parse_iso(out['deadline']):%d %b %H:%M} UTC. "
+             f"Forecast issued {parse_iso(out['issued_utc']):%d %b %H:%M} UTC ({', '.join(out.get('models_used', []))}, "
+             f"blended), alone to day {out.get('handover_day', ['?'])[0]}, then handing over to each past year by day "
+             f"{out.get('handover_day', ['?', '?'])[1]}. Polar {st['table']} x{st['polar_factor']}, motor at "
+             f"{st['motor_speed_kn']} kn below {st['motor_wind_below_kn']} kn of wind, at most {st['motor_max_h']} h. "
+             f"Status: {out['status']}.", "",
+             "| Strategy | On time | Probability | El Nino-weighted | Median days | 10-90 % days | Slowest | Median motoring | Median fuel |",
+             "|---|---|---|---|---|---|---|---|---|"]
+    for k, v in out["strategies"].items():
+        s = v.get("summary") or {}
+        if not s.get("years"):
+            lines.append(f"| {k}: {v['label']} | - | | | | | | | |")
+            continue
+        lines.append(f"| {k}: {v['label']} | {s['on_time']}/{s['years']} | {round(100 * s['probability'])}% | "
+                     f"{round(100 * (s.get('probability_enso_weighted') or 0))}% | {s['days_median']} | "
+                     f"{s['days_p10']}-{s['days_p90']} | {s['days_max']} | {s['motor_hours_median']} h | "
+                     f"{s.get('fuel_l_median', '-')} L |")
+    lines += ["", "## In past years' own weather (no forecast)", "",
+              "| Strategy | On time | Median days | 10-90 % days | Slowest | Median motoring | Median fuel |",
+              "|---|---|---|---|---|---|---|"]
+    for k, v in out["strategies"].items():
+        s = v.get("history_summary") or {}
+        if s.get("years"):
+            lines.append(f"| {k}: {v['label']} | {s['on_time']}/{s['years']} | {s['days_median']} | "
+                         f"{s['days_p10']}-{s['days_p90']} | {s['days_max']} | {s['motor_hours_median']} h | "
+                         f"{s.get('fuel_l_median', '-')} L |")
+    keys = list(out["strategies"])
+    if "A" in keys and len(keys) > 1:
+        byyear = {k: {r["year"]: r for r in out["strategies"][k]["history"] if r.get("status") == "ok"} for k in keys}
+        others = [k for k in keys if k != "A"]
+        lines += ["", "Year by year in past weather (days; + = slower than A, the router's fastest):", "",
+                  "| Year | A days | " + " | ".join(f"{k} days | {k} vs A" for k in others) + " |",
+                  "|---|---|" + "---|---|" * len(others)]
+        for yr in sorted(byyear["A"]):
+            a = byyear["A"][yr]["days"]
+            cells = []
+            for k in others:
+                r = byyear[k].get(yr)
+                cells += [f"{r['days']}" if r else "-", f"{(r['days'] - a) * 24:+.0f} h" if r else "-"]
+            lines.append(f"| {yr} | {a} | " + " | ".join(cells) + " |")
+    return "\n".join(lines) + "\n"
+
+
+STRATEGY_COLOURS = {"A": (200, 40, 40), "B": (20, 90, 190), "C": (30, 140, 70)}
+
+
+def strategies_jpeg(path, out, width=1800):
+    from .chart import _basemap
+
+    allr = [(k, r) for k, v in out["strategies"].items() for r in v["results"] if r.get("status") == "ok"]
+    if not allr:
+        return None
+    lats = [p[1] for _, r in allr for p in r["track"]] + [out["to"][0]]
+    lons = [p[2] for _, r in allr for p in r["track"]] + [out["to"][1]]
+    img, d, xy, (f_s, f_m, f_l), (w, h, top) = _basemap(lats, lons, width)
+    for k, r in allr:
+        col = STRATEGY_COLOURS.get(k, (90, 90, 90))
+        d.line([xy(p[1], p[2]) for p in r["track"]], fill=col, width=1)
+    for k, v in out["strategies"].items():  # the median-time run of each strategy, drawn bold
+        ok = sorted((r for r in v["results"] if r.get("status") == "ok"), key=lambda r: r["days"])
+        if ok:
+            med = ok[len(ok) // 2]
+            d.line([xy(p[1], p[2]) for p in med["track"]], fill=STRATEGY_COLOURS.get(k, (90, 90, 90)), width=5)
+    for la, lo in (out["from"], out["to"]):
+        x, yy = xy(la, lo)
+        d.ellipse([x - 8, yy - 8, x + 8, yy + 8], fill=(20, 20, 20))
+    d.rectangle([0, 0, w, top], fill=(255, 255, 255))
+    d.text((16, 10), f"{out['yacht']}: routing strategies, leaving {parse_iso(out['depart']):%a %d %b} "
+                     f"(forecast {parse_iso(out['issued_utc']):%d %b %H:%M}Z, then past years)", fill=(30, 30, 40), font=f_l)
+    x = 16
+    for k, v in out["strategies"].items():
+        s = v.get("summary") or {}
+        lab = f"{k}: {v['label']} - median {s.get('days_median')} d, {s.get('on_time')}/{s.get('years')} on time"
+        d.text((x, 60), lab, fill=STRATEGY_COLOURS.get(k, (90, 90, 90)), font=f_s)
+        x += int(d.textlength(lab, font=f_s)) + 30
+    img.save(path, "JPEG", quality=88, optimize=True)
+    return path
+
+
 def summarise(results, allow_h, weights=None) -> dict:
     ok = [r for r in results if r.get("status") == "ok"]
     counted = [r for r in results if r.get("status") in ("ok", "no_route")]

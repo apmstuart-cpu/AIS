@@ -185,3 +185,39 @@ def test_fetch_elsewhere_then_merge(tmp_path, monkeypatch):
     added = climate.merge(server, str(tmp_path / "mac.db"))
     assert added["climate_wind"] > 0 and added["climate_cells"] > 0 and added["climate_wave_cells"] > 0
     assert climate.merge(server, str(tmp_path / "mac.db"))["climate_wind"] == 0  # idempotent
+
+
+def test_strategies_compare_routes_in_forecast_and_past_weather(tmp_path, monkeypatch, cfg):
+    from yachtspeed.geo import utcnow
+
+    def fake_fetch(self, provider, kind, lat, lon, start, end):
+        if provider in ("om_marine", "om_era5_ocean"):
+            return []
+        t0 = datetime.fromisoformat(start + "T00:00:00+00:00")
+        n = int((datetime.fromisoformat(end + "T00:00:00+00:00") - t0).total_seconds() // 3600) + 24
+        spd = (lambda la: 8.0 if la > 25 else 17.0)  # calm in the north, trades in the south
+        return [{"time_utc": (t0 + timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M:00Z"), "wind_speed_kn": spd(lat),
+                 "wind_dir_from_deg": 65.0, "wind_gust_kn": None, "grid_lat": lat, "grid_lon": lon} for h in range(n)]
+
+    monkeypatch.setattr(weather.OpenMeteo, "fetch", fake_fetch)
+    monkeypatch.setattr(climate, "oni_table", lambda conn=None: {("OND", 2021): -0.91, ("ASO", 2026): 2.46})
+    cfg.calls_per_minute = 100000
+    cfg.skill_weighting = False
+    conn = connect(":memory:")
+    y = Yacht(name="X", mmsi="1", speed_table="oyster885_std", polar_factor=0.85)
+    _, s = parse_destination("rubicon")
+    _, d = parse_destination("english-harbour")
+    dep = (utcnow() + timedelta(days=2)).replace(minute=0, second=0, microsecond=0)
+    by = dep + timedelta(days=16, hours=18)
+    climate.run(conn, cfg, y, s, d, dep, by, [2021], res=5.0, motor_wind_below_kn=10, motor_speed_kn=8.5,
+                motor_max_h=60, real_waves=False)  # store 2021's history
+    out = climate.run_strategies(conn, cfg, y, s, d, dep, by, [2021], res=5.0, motor_wind_below_kn=10,
+                                 motor_speed_kn=8.5, motor_max_h=60, burn_lph=15, models=("ecmwf",),
+                                 out_path=str(tmp_path / "st.json"))
+    assert out["status"] == "complete"
+    for k in ("A", "B", "C"):
+        assert out["strategies"][k]["results"] and out["strategies"][k]["history"]
+        assert out["strategies"][k]["results"][0]["status"] == "ok"
+    md = climate.strategies_markdown(out)
+    assert "Year by year in past weather" in md and "| 2021 |" in md and "B vs A" in md
+    assert (tmp_path / "st.jpg").exists()
