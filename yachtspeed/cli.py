@@ -670,7 +670,7 @@ def cmd_climate_route(cfg, a):
     _, dest = parse_destination(a.to)
     depart = _dt.fromisoformat(a.depart).astimezone(_tz.utc)
     deadline = _dt.fromisoformat(a.by).astimezone(_tz.utc)
-    y0, y1 = (int(x) for x in a.years.split("-"))
+    years = _years(a.years)
     fuel_note = None
     if a.motor_max_h is None and a.fuel_l:
         # usable fuel after the reserve and the generator, at the motoring burn rate
@@ -682,7 +682,7 @@ def cmd_climate_route(cfg, a):
     out_dir = _P(a.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     base = out_dir / f"climate_{a.name}"
-    out = climate.run(conn, cfg, y, start, dest, depart, deadline, list(range(y0, y1 + 1)), res=a.res,
+    out = climate.run(conn, cfg, y, start, dest, depart, deadline, years, res=a.res,
                       step_h=a.step_h, motor_wind_below_kn=a.motor_below, motor_speed_kn=a.motor_speed,
                       motor_max_h=a.motor_max_h, maneuver_min=a.gybe_loss_min, per_day=a.max_calls_per_day,
                       wait=not a.no_wait, out_path=str(base) + ".json", name=a.name,
@@ -695,6 +695,19 @@ def cmd_climate_route(cfg, a):
     print(climate.markdown(out))
 
 
+def _years(spec):
+    """'2006-2025', '1997', or a mix: '1997,2006-2025'."""
+    out = []
+    for part in spec.split(","):
+        part = part.strip()
+        if "-" in part:
+            a, b = (int(x) for x in part.split("-"))
+            out += list(range(a, b + 1))
+        elif part:
+            out.append(int(part))
+    return sorted(set(out))
+
+
 def cmd_climate_fetch(cfg, a):
     """Download passage history on another machine (its own API allowance), for climate-merge."""
     from datetime import datetime as _dt, timezone as _tz
@@ -705,8 +718,8 @@ def cmd_climate_fetch(cfg, a):
     conn = db.connect(a.db)
     _, start = parse_destination(a.frm)
     _, dest = parse_destination(a.to)
-    y0, y1 = (int(x) for x in a.years.split("-"))
-    climate.fetch_only(conn, start, dest, _dt.fromisoformat(a.depart).astimezone(_tz.utc), list(range(y0, y1 + 1)),
+    years = _years(a.years)
+    climate.fetch_only(conn, start, dest, _dt.fromisoformat(a.depart).astimezone(_tz.utc), years,
                        res=a.res, waves=not a.no_waves, wind=not a.waves_only, per_day=a.max_calls_per_day,
                        progress=lambda m: print(m, flush=True))
     conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
@@ -732,7 +745,7 @@ def cmd_strategies(cfg, a):
     _, dest = parse_destination(a.to)
     depart = _dt.fromisoformat(a.depart).astimezone(_tz.utc)
     deadline = _dt.fromisoformat(a.by).astimezone(_tz.utc)
-    y0, y1 = (int(x) for x in a.years.split("-"))
+    years = _years(a.years)
     motor_max_h = a.motor_max_h
     if motor_max_h is None and a.fuel_l:
         usable = a.fuel_l * (1 - a.fuel_reserve) - a.genset_lph * 24 * (deadline - depart).total_seconds() / 86400
@@ -742,7 +755,7 @@ def cmd_strategies(cfg, a):
         la, lo = (float(x) for x in a.via.split(","))
         strategies["B"] = {"label": f"classic: south-west to {la:g}N {abs(lo):g}W first", "via": (la, lo)}
     _P(a.out_dir).mkdir(parents=True, exist_ok=True)
-    out = climate.run_strategies(conn, cfg, y, start, dest, depart, deadline, list(range(y0, y1 + 1)),
+    out = climate.run_strategies(conn, cfg, y, start, dest, depart, deadline, years,
                                  motor_wind_below_kn=a.motor_below, motor_speed_kn=a.motor_speed,
                                  motor_max_h=motor_max_h, strategies=strategies, burn_lph=a.burn_lph,
                                  fade=(a.fade_from, a.fade_to),
@@ -824,6 +837,26 @@ def cmd_polar_history(cfg, a):
     slug = "".join(c if c.isalnum() else "_" for c in y.name.lower())
     (out / f"climate_{slug}_polar_history.json").write_text(json.dumps(res, indent=1, default=str))
     (out / f"climate_{slug}_polar_history.md").write_text(md)
+    print(md)
+
+
+def cmd_forecast_maps(cfg, a):
+    """Forecast wind maps every few hours for the first days of a passage, plus the assumptions text."""
+    from datetime import datetime as _dt, timezone as _tz
+    from pathlib import Path as _P
+
+    from . import fcmaps
+    from .speedtable import parse_destination
+
+    conn = _conn(cfg)
+    _, start = parse_destination(a.frm)
+    depart = _dt.fromisoformat(a.depart).astimezone(_tz.utc)
+    info = fcmaps.build(conn, cfg, _client(conn, cfg), start, depart, a.out_dir, a.name, days=a.days,
+                        step_h=a.step_h, res=a.res, strategies_json=a.strategies,
+                        keys=tuple(k.strip() for k in a.options.split(",") if k.strip()))
+    md = fcmaps.assumptions_md(info, cfg, a.strategies, a.climate)
+    (_P(a.out_dir) / f"climate_{a.name}_assumptions.md").write_text(md)
+    print(json.dumps({k: v for k, v in info.items() if k != "weights"}, indent=1))
     print(md)
 
 
@@ -1132,6 +1165,18 @@ def build_parser():
     s.add_argument("--max-calls-per-day", type=int, default=1500)
     s.add_argument("--out-dir", default="/var/lib/yachtspeed/report")
     s.set_defaults(fn=cmd_polar_history)
+    s = sub.add_parser("forecast-maps", help="forecast wind maps every few hours for the first days, plus assumptions")
+    s.add_argument("--from", dest="frm", required=True)
+    s.add_argument("--depart", required=True)
+    s.add_argument("--days", type=int, default=4)
+    s.add_argument("--step-h", type=int, default=3)
+    s.add_argument("--res", type=float, default=1.0)
+    s.add_argument("--strategies", default="/var/lib/yachtspeed/report/climate_alibi_strategies.json")
+    s.add_argument("--climate", default="/var/lib/yachtspeed/report/climate_alibi_antigua.json")
+    s.add_argument("--options", default="A,D", help="which options' routes to draw")
+    s.add_argument("--name", default="alibi_forecast")
+    s.add_argument("--out-dir", default="/var/lib/yachtspeed/report")
+    s.set_defaults(fn=cmd_forecast_maps)
     s = sub.add_parser("climate-merge", help="add a climate-fetch file's history to this server's store")
     s.add_argument("file")
     s.set_defaults(fn=cmd_climate_merge)
