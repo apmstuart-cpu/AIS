@@ -3,7 +3,7 @@ written summary of the forecast assumptions. Drawn on the server with Pillow; pu
 report as climate_<name>_day<N>.jpg and climate_<name>_assumptions.md.
 
 Each panel shows the skill-weighted blend of the forecast models (colour = wind strength, arrows =
-direction) and, if a strategies result is given, the median routed course of the chosen options with
+direction, as white streaks) and, if a strategies result is given, the most typical routed course of the chosen options with
 the yacht's position at that hour.
 """
 
@@ -16,17 +16,31 @@ from pathlib import Path
 
 from .geo import iso, parse_iso, utcnow
 
-BANDS = [(0, (205, 225, 245)), (6, (150, 205, 235)), (10, (120, 200, 140)), (14, (200, 225, 100)),
-         (18, (250, 210, 80)), (22, (245, 150, 60)), (26, (220, 70, 60)), (32, (150, 50, 140))]
-TRACK_COLOURS = {"A": (200, 30, 40), "B": (20, 90, 190), "C": (30, 140, 70), "D": (230, 120, 0), "E": (120, 40, 150)}
+# Continuous wind colour scale in the style of the popular weather-map sites: deep blue in calms,
+# through teal and green in the trades, to yellow, red and purple in gales. (knots, RGB)
+SCALE = [(0, (98, 113, 183)), (2, (57, 97, 159)), (6, (74, 148, 169)), (10, (77, 141, 123)), (14, (83, 165, 83)),
+         (17.5, (53, 159, 53)), (21, (167, 157, 81)), (25, (159, 127, 58)), (29, (161, 108, 92)), (33, (129, 58, 78)),
+         (37, (175, 80, 136)), (41, (117, 74, 147)), (47, (109, 97, 163)), (60, (90, 90, 110))]
+LEGEND_TICKS = [0, 5, 10, 20, 30, 40, 60]  # evenly spaced on the colour bar, as on the weather apps
+BANDS = SCALE  # kept for older callers
+PLACES = [("Las Palmas", 28.13, -15.42), ("Santa Cruz", 28.47, -16.25),
+          ("Funchal", 32.65, -16.91), ("Mindelo", 16.89, -24.98), ("Dakhla", 23.70, -15.93),
+          ("Nouadhibou", 20.93, -17.03), ("Praia", 14.92, -23.51), ("English Harbour", 17.00, -61.76),
+          ("Barbados", 13.10, -59.62), ("Martinique", 14.60, -61.07), ("Azores", 37.74, -25.67)]
+TRACK_COLOURS = {"A": (255, 70, 80), "B": (80, 160, 255), "C": (60, 230, 120), "D": (255, 170, 30), "E": (210, 120, 255)}
 
 
 def colour(kn):
-    c = BANDS[0][1]
-    for lim, col in BANDS:
-        if kn >= lim:
-            c = col
-    return c
+    """Wind colour for `kn`, interpolated smoothly along SCALE."""
+    if kn is None:
+        return (60, 60, 70)
+    if kn <= SCALE[0][0]:
+        return SCALE[0][1]
+    for (k0, c0), (k1, c1) in zip(SCALE, SCALE[1:]):
+        if kn <= k1:
+            f = (kn - k0) / (k1 - k0)
+            return tuple(int(round(a + (b - a) * f)) for a, b in zip(c0, c1))
+    return SCALE[-1][1]
 
 
 def _font(size):
@@ -62,97 +76,179 @@ def position_at(track, t):
     return None
 
 
+class _Field:
+    """The wind on a regular lat/lon lattice at one time, sampled once from the grid, with bilinear lookup."""
+
+    def __init__(self, grid, bbox, t, d=0.25):
+        lat0, lon0, lat1, lon1 = bbox
+        self.lat0, self.lon0, self.d = lat0, lon0, d
+        self.ny, self.nx = int(round((lat1 - lat0) / d)) + 1, int(round((lon1 - lon0) / d)) + 1
+        self.u = [[None] * self.nx for _ in range(self.ny)]
+        self.v = [[None] * self.nx for _ in range(self.ny)]
+        self.s = [[None] * self.nx for _ in range(self.ny)]
+        for j in range(self.ny):
+            for i in range(self.nx):
+                x = grid.sample(lat0 + j * d, lon0 + i * d, t)
+                if x and x.get("wind_speed_kn") is not None:
+                    r = math.radians(x["wind_dir_from_deg"])
+                    sp = x["wind_speed_kn"]
+                    self.s[j][i] = sp
+                    self.u[j][i], self.v[j][i] = -sp * math.sin(r), -sp * math.cos(r)  # towards east, north
+
+    def at(self, la, lo, arr=None):
+        arr = arr or self.s
+        fy, fx = (la - self.lat0) / self.d, (lo - self.lon0) / self.d
+        j, i = int(math.floor(fy)), int(math.floor(fx))
+        if not (0 <= j < self.ny - 1 and 0 <= i < self.nx - 1):
+            return None
+        fy, fx = fy - j, fx - i
+        acc = wsum = 0.0
+        for dj, di, w in ((0, 0, (1 - fy) * (1 - fx)), (0, 1, (1 - fy) * fx), (1, 0, fy * (1 - fx)), (1, 1, fy * fx)):
+            val = arr[j + dj][i + di]
+            if val is not None and w > 0:
+                acc += val * w
+                wsum += w
+        return acc / wsum if wsum else None
+
+    def uv(self, la, lo):
+        u, v = self.at(la, lo, self.u), self.at(la, lo, self.v)
+        return (u, v) if u is not None and v is not None else None
+
+
 def panel(grid, bbox, t, tracks, land_rings, w=880, h=560, label=""):
-    from PIL import Image, ImageDraw
+    """One map: smooth wind colours, white streamlines along the wind, darkened land with white coasts,
+    and each option's routed course with the yacht's position at time `t`."""
+    from PIL import Image, ImageDraw, ImageFilter
 
     lat0, lon0, lat1, lon1 = bbox
-    img = Image.new("RGB", (w, h), (255, 255, 255))
-    d = ImageDraw.Draw(img)
-    top = 30
+    top = 34
     ph = h - top
+    field = _Field(grid, bbox, t)
 
     def xy(la, lo):
         return (lo - lon0) / (lon1 - lon0) * w, top + (lat1 - la) / (lat1 - lat0) * ph
 
-    step = 8  # pixels per colour block
-    for py in range(top, h, step):
-        la = lat1 - (py - top + step / 2) / ph * (lat1 - lat0)
-        for px in range(0, w, step):
-            lo = lon0 + (px + step / 2) / w * (lon1 - lon0)
-            s = grid.sample(la, lo, t)
-            if s:
-                d.rectangle([px, py, px + step, py + step], fill=colour(s["wind_speed_kn"]))
+    # 1. wind colours: one pixel per lattice point, smoothly enlarged
+    small = Image.new("RGB", (field.nx, field.ny))
+    sp = small.load()
+    for j in range(field.ny):
+        for i in range(field.nx):
+            sp[i, field.ny - 1 - j] = colour(field.s[j][i])
+    base = small.resize((w, ph), Image.BICUBIC).filter(ImageFilter.GaussianBlur(2))
+    img = Image.new("RGB", (w, h), (24, 26, 34))
+    img.paste(base, (0, top))
+
+    # 2. land keeps its wind colour, slightly shaded, with a thin dark coastline
+    mask = Image.new("L", (w, h), 0)
+    md = ImageDraw.Draw(mask)
+    rings = []
     for ring in land_rings:
         pts = [xy(p[1], p[0]) for p in ring]
         if len(pts) > 2:
-            d.polygon(pts, fill=(236, 228, 205), outline=(150, 140, 110))
-    f_s, f_t = _font(15), _font(19)
+            md.polygon(pts, fill=45)
+            rings.append(pts)
+    img.paste(Image.new("RGB", (w, h), (10, 10, 20)), (0, 0), mask)
+    d = ImageDraw.Draw(img, "RGBA")
+    for pts in rings:
+        d.line(pts + [pts[0]], fill=(25, 25, 35, 230), width=2)
+    # 3. graticule
+    f_s, f_t = _font(14), _font(19)
     la = math.ceil(lat0 / 2) * 2
-    while la < lat1:  # light gridlines every 2 deg
+    while la < lat1:
         y = xy(la, lon0)[1]
-        d.line([(0, y), (w, y)], fill=(255, 255, 255), width=1)
-        d.text((3, y + 1), f"{abs(la):g}°N", fill=(60, 60, 70), font=f_s)
+        d.line([(0, y), (w, y)], fill=(255, 255, 255, 45), width=1)
+        d.text((4, y + 1), f"{abs(la):g}°N", fill=(255, 255, 255, 190), font=f_s)
         la += 2
     lo = math.ceil(lon0 / 4) * 4
     while lo < lon1:
         x = xy(lat0, lo)[0]
-        d.line([(x, top), (x, h)], fill=(255, 255, 255), width=1)
-        d.text((x + 3, h - 18), f"{abs(lo):g}°W", fill=(60, 60, 70), font=f_s)
+        d.line([(x, top), (x, h)], fill=(255, 255, 255, 45), width=1)
+        d.text((x + 4, h - 18), f"{abs(lo):g}°W", fill=(255, 255, 255, 190), font=f_s)
         lo += 4
-    dstep = 1.5  # wind arrows (pointing downwind) every 1.5 deg
-    a = lat0 + dstep / 2
-    while a < lat1:
-        b = lon0 + dstep / 2
-        while b < lon1:
-            s = grid.sample(a, b, t)
-            if s:
-                x, y = xy(a, b)
-                r = math.radians(s["wind_dir_from_deg"])
-                ux, uy = -math.sin(r), math.cos(r)  # screen: y grows downwards
-                ln = 10 + min(s["wind_speed_kn"], 30) * 0.6
-                x0, y0, x1, y1 = x - ux * ln / 2, y - uy * ln / 2, x + ux * ln / 2, y + uy * ln / 2
-                d.line([(x0, y0), (x1, y1)], fill=(40, 40, 50), width=2)
-                hx, hy = -uy, ux
-                d.polygon([(x1, y1), (x1 - ux * 7 + hx * 4, y1 - uy * 7 + hy * 4),
-                           (x1 - ux * 7 - hx * 4, y1 - uy * 7 - hy * 4)], fill=(40, 40, 50))
-            b += dstep
-        a += dstep
+
+    # 4. wind particles: many short, thin white streaks along the wind, brightest at the head
+    import random
+
+    rnd = random.Random(7)  # same scatter on every panel, so the eye follows the wind, not the noise
+    over = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    od = ImageDraw.Draw(over)
+    dpp = (lon1 - lon0) / w  # degrees per pixel
+    for _ in range(int(w * ph / 650)):
+        px, py = rnd.uniform(0, w), rnd.uniform(top, h)
+        la_ = lat1 - (py - top) / ph * (lat1 - lat0)
+        lo_ = lon0 + px / w * (lon1 - lon0)
+        pts = [(la_, lo_)]
+        for _ in range(5):
+            uvv = field.uv(*pts[-1])
+            if not uvv:
+                break
+            u, v = uvv
+            spd = math.hypot(u, v)
+            if spd < 0.5:
+                break
+            k = dpp * (1.0 + 0.09 * min(spd, 35))  # 5-20 px streaks: longer in stronger wind
+            pts.append((pts[-1][0] + v / spd * k,
+                        pts[-1][1] + u / spd * k / max(0.3, math.cos(math.radians(pts[-1][0])))))
+        if len(pts) < 3:
+            continue
+        xs = [xy(a, b) for a, b in pts]
+        n = len(xs) - 1
+        for q in range(n):
+            od.line([xs[q], xs[q + 1]], fill=(255, 255, 255, int(20 + 170 * (q + 1) / n)), width=2)
+    img.paste(over, (0, 0), over)
+    d = ImageDraw.Draw(img, "RGBA")
+    f_p = _font(15)
+    for name, pla, plo in PLACES:
+        if lat0 < pla < lat1 and lon0 < plo < lon1:
+            x, y = xy(pla, plo)
+            d.ellipse([x - 2, y - 2, x + 2, y + 2], fill=(255, 255, 255, 230))
+            d.text((x + 5, y - 9), name, fill=(255, 255, 255, 235), font=f_p, stroke_width=2, stroke_fill=(30, 30, 40))
+
+    # 5. routes and positions
     for k, tr in tracks.items():
-        col = TRACK_COLOURS.get(k, (0, 0, 0))
-        pts = [xy(p[1], p[2]) for p in tr if lat0 <= p[1] <= lat1 and lon0 <= p[2] <= lon1]
+        col = TRACK_COLOURS.get(k, (255, 255, 255))
+        pts = [xy(p[1], p[2]) for p in tr if lat0 - 1 <= p[1] <= lat1 + 1 and lon0 - 1 <= p[2] <= lon1 + 1]
         if len(pts) > 1:
-            d.line(pts, fill=col, width=3)
+            d.line(pts, fill=(0, 0, 0, 150), width=6)
+            d.line(pts, fill=col + (255,), width=3)
         pos = position_at(tr, t)
         if pos:
             x, y = xy(*pos)
-            d.ellipse([x - 8, y - 8, x + 8, y + 8], fill=col, outline=(255, 255, 255), width=2)
-            d.text((x + 10, y - 8), k, fill=col, font=f_t)
-    d.rectangle([0, 0, w, top], fill=(255, 255, 255))
-    d.text((8, 5), label, fill=(20, 20, 30), font=f_t)
+            d.ellipse([x - 9, y - 9, x + 9, y + 9], fill=col + (255,), outline=(255, 255, 255, 255), width=3)
+            d.text((x + 12, y - 11), k, fill=(255, 255, 255, 255), font=f_t, stroke_width=3, stroke_fill=(0, 0, 0))
+
+    # 6. title bar
+    d.rectangle([0, 0, w, top], fill=(24, 26, 34, 255))
+    d.text((10, 6), label, fill=(255, 255, 255), font=f_t)
+    d.rectangle([0, 0, w - 1, h - 1], outline=(24, 26, 34, 255), width=2)
     return img
 
 
 def legend(w, tracks):
     from PIL import Image, ImageDraw
 
-    img = Image.new("RGB", (w, 60), (255, 255, 255))
+    img = Image.new("RGB", (w, 66), (24, 26, 34))
     d = ImageDraw.Draw(img)
     f = _font(17)
+    x0, x1, top = 10, min(w - 20, 1000), 6
+    d.rounded_rectangle([x0 - 4, top - 2, x1 + 4, top + 26], radius=13, fill=(60, 62, 72))
+    seg = (x1 - x0 - 80) / (len(LEGEND_TICKS) - 1)
+    xs0 = x0 + 40
+    d.text((x0 + 6, top + 3), "kt", fill=(255, 255, 255), font=_font(16))
+    for x in range(int(xs0), x1):
+        i = min(int((x - xs0) / seg), len(LEGEND_TICKS) - 2)
+        fr = min(1.0, (x - xs0 - i * seg) / seg)
+        kn = LEGEND_TICKS[i] + (LEGEND_TICKS[i + 1] - LEGEND_TICKS[i]) * fr
+        d.line([(x, top), (x, top + 24)], fill=colour(kn))
+    for i, kn in enumerate(LEGEND_TICKS):
+        x = xs0 + i * seg
+        d.text((x - 4 * len(str(kn)), top + 3), str(kn), fill=(255, 255, 255), font=_font(16), stroke_width=2, stroke_fill=(40, 40, 50))
     x = 10
-    d.text((x, 4), "True wind (kn):", fill=(20, 20, 30), font=f)
-    x += 140
-    for i, (lim, col) in enumerate(BANDS):
-        nxt = BANDS[i + 1][0] if i + 1 < len(BANDS) else None
-        lab = f"{lim}-{nxt}" if nxt else f"{lim}+"
-        d.rectangle([x, 6, x + 26, 22], fill=col, outline=(90, 90, 90))
-        d.text((x + 30, 4), lab, fill=(20, 20, 30), font=f)
-        x += 95
-    x = 10
-    d.text((x, 32), "Arrows point downwind.  Routed course and position at that hour:", fill=(20, 20, 30), font=f)
-    x += 560
+    d.text((x, 38), "White streaks flow with the wind.  Routed course and position at that hour:", fill=(255, 255, 255), font=f)
+    x += 640
     for k in tracks:
-        d.ellipse([x, 34, x + 16, 50], fill=TRACK_COLOURS.get(k, (0, 0, 0)))
-        d.text((x + 22, 32), k, fill=TRACK_COLOURS.get(k, (0, 0, 0)), font=f)
+        d.ellipse([x, 40, x + 16, 56], fill=TRACK_COLOURS.get(k, (255, 255, 255)), outline=(255, 255, 255), width=2)
+        d.text((x + 22, 38), k, fill=(255, 255, 255), font=f)
         x += 60
     return img
 
@@ -202,10 +298,10 @@ def build(conn, cfg, client, start, depart: datetime, out_dir, name, days=4, ste
     for day in range(days):
         times = [depart + timedelta(days=day, hours=h) for h in range(0, 24, step_h)]
         cols, rows = 2, math.ceil(len(times) / 2)
-        sheet = Image.new("RGB", (cols * pw + 30, rows * ph + 150), (255, 255, 255))
+        sheet = Image.new("RGB", (cols * pw + 30, rows * ph + 150), (24, 26, 34))
         dd = ImageDraw.Draw(sheet)
         dd.text((15, 10), f"Forecast wind, day {day + 1} of the passage: {times[0]:%a %d %b} "
-                          f"(blend of {', '.join(used)}; issued about {iso(utcnow())[:16]}Z)", fill=(20, 20, 30),
+                          f"(blend of {', '.join(used)}; drawn {iso(utcnow())[:16]}Z)", fill=(255, 255, 255),
                 font=_font(26))
         sheet.paste(legend(cols * pw, tracks), (15, 48))
         for i, t in enumerate(times):
@@ -268,5 +364,5 @@ def assumptions_md(info, cfg, strategies_json=None, climate_json=None) -> str:
               "- **Current:** mean surface current for these dates over 2022-2025.",
               "- **Not modelled:** squalls, gusts, crew fatigue, breakages, sail changes beyond the polar.",
               "", f"Wind maps: every 3 h for the first 4 days, area {info.get('bbox')}, colours by wind strength, "
-              "arrows downwind; the coloured dots are each option's most typical routed course at that hour."]
+              "white streaks flowing with the wind; the coloured dots are each option's most typical routed course at that hour."]
     return "\n".join(lines) + "\n"
