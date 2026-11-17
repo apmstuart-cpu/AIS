@@ -220,6 +220,19 @@ def build(conn, cfg, client, start, depart: datetime, out_dir, name, days=4, ste
                         if weights is not None else None)}
 
 
+def _years_text(yrs):
+    """[1997, 2006, 2007, ..., 2025] -> '1997, 2006-2025'."""
+    out, run = [], []
+    for y in yrs:
+        if run and y != run[-1] + 1:
+            out.append(f"{run[0]}-{run[-1]}" if len(run) > 1 else str(run[0]))
+            run = []
+        run.append(y)
+    if run:
+        out.append(f"{run[0]}-{run[-1]}" if len(run) > 1 else str(run[0]))
+    return ", ".join(out) or "?"
+
+
 def assumptions_md(info, cfg, strategies_json=None, climate_json=None) -> str:
     """The forecast and modelling assumptions behind a run, as text for a report appendix."""
     lines = ["# Forecast and model assumptions", ""]
@@ -233,15 +246,19 @@ def assumptions_md(info, cfg, strategies_json=None, climate_json=None) -> str:
     w = info.get("weights") or st.get("model_weights") or {}
     for lead, ws in w.items():
         lines.append(f"  - {lead}: " + ", ".join(f"{m} {p}%" for m, p in ws.items()))
+    yrs = sorted(int(y) for y in (cl.get("years") or st.get("years") or []))
     hd = st.get("handover_day") or (cl.get("forecast") or {}).get("handover_day")
     lines += [f"- **Forecast into history:** the forecast's weight fades steadily from 2 days after issue to zero "
               f"at 15 days; for this run from day {hd[0] if hd else '?'} to day {hd[1] if hd else '?'} of the "
-              "passage. Each of 20 past years' weather (ERA5, 2006-2025) then takes over: 20 possible endings.",
+              f"passage. Each of {len(yrs) or '?'} past years' weather (ERA5, {_years_text(yrs)}) then takes over: "
+              f"{len(yrs) or '?'} possible endings.",
               ]
     en = cl.get("enso") or {}
+    ranked = sorted((en.get("years") or {}).items(), key=lambda kv: -kv[1].get("weight", 0))
+    top = ", ".join(f"{y} ({v.get('weight')})" for y, v in ranked[:3] if v.get("weight", 0) >= 0.5)
     if en.get("now"):
         lines.append(f"- **El Nino weighting:** ONI {en['now'].get('oni')} ({en['now'].get('season')}); past years "
-                     "weighted by how close their Oct-Dec ONI was (2015 and 2023 most).")
+                     "weighted by how close their Oct-Dec ONI was" + (f" ({top} most)." if top else "."))
     s = st.get("settings") or cl.get("settings") or {}
     lines += [f"- **Yacht:** polar {s.get('table')} x {s.get('polar_factor')}; 3 min per tack or gybe; motor at "
               f"{s.get('motor_speed_kn')} kn below {s.get('motor_wind_below_kn')} kn of wind (option D: below 7 kn), "

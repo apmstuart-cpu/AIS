@@ -30,3 +30,14 @@ def test_forecast_maps_draw_four_days(tmp_path, monkeypatch):
     assert info["status"] == "ok" and len(info["files"]) == 2
     md = fcmaps.assumptions_md(info, cfg, str(sj))
     assert "Forecast models" in md and "Wind maps" in md
+
+
+def test_assumptions_name_the_years_and_top_enso_years(tmp_path):
+    import json
+    cl = tmp_path / "c.json"
+    cl.write_text(json.dumps({"years": [1997] + list(range(2006, 2026)),
+                              "enso": {"now": {"oni": 2.46, "season": "ASO 2026"},
+                                       "years": {"1997": {"weight": 0.993}, "2015": {"weight": 0.96},
+                                                 "2007": {"weight": 0.1}}}}))
+    txt = fcmaps.assumptions_md({}, None, None, str(cl))
+    assert "21 past years" in txt and "1997, 2006-2025" in txt and "1997 (0.993)" in txt and "2007" not in txt
