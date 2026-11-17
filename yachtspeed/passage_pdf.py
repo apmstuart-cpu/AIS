@@ -63,7 +63,7 @@ def option_map(strat, key, path, width=1800):
         d.ellipse([x - 9, y - 9, x + 9, y + 9], fill=(20, 20, 20))
     d.rectangle([0, 0, w, top], fill=(255, 255, 255))
     d.text((16, 10), f"Option {key}: {v['label']}", fill=col, font=f_l)
-    d.text((16, 52), f"Bold: the most typical of {len(ok)} runs ({best['days']} d; thick = sailing, thin = motoring; "
+    d.text((16, 52), f"Bold: the most typical of {len(ok)} runs ({best['days']:.1f} d; thick = sailing, thin = motoring; "
                      "dot = each day at sea). Faint: the others.", fill=(40, 40, 50), font=f_s)
     img.save(path, "JPEG", quality=85, optimize=True)
     return best
@@ -117,6 +117,12 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
     def when(iso_s):
         return parse_iso(iso_s).strftime("%a %d %b %H:%M") + " UTC" if iso_s else "-"
 
+    def D(x):  # days to one decimal place
+        return "-" if x is None else f"{x:.1f}"
+
+    def DR(a, b):
+        return f"{D(a)}-{D(b)}"
+
     dep, ddl = parse_iso(st["depart"]), parse_iso(st["deadline"])
     s = st["settings"]
     yrs = sorted(r["year"] for r in c85["results"])
@@ -133,14 +139,14 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
               Paragraph(f"Passage model and routing options. Forecast issued {when(st['issued_utc'])}; "
                         f"built {datetime.now(timezone.utc):%d %b %Y %H:%M} UTC.", S), Spacer(1, 4 * mm),
               Paragraph(f"<b>Leaving</b> {dep:%a %d %b %H:%M} UTC. <b>Deadline</b> {ddl:%a %d %b %H:%M} UTC "
-                        f"(6 Dec 23:59 Antigua), {st['allowed_days']} days. Polar {s.get('table')} x {s.get('polar_factor')}; "
+                        f"(6 Dec 23:59 Antigua), {D(st['allowed_days'])} days. Polar {s.get('table')} x {s.get('polar_factor')}; "
                         f"motor at {s.get('motor_speed_kn')} kn below {s.get('motor_wind_below_kn')} kn of wind, "
-                        f"at most {s.get('motor_max_h')} h on the fuel.", P), Spacer(1, 3 * mm),
+                        f"at most {s.get('motor_max_h'):.0f} h of motoring within the fuel consumption limitation.", P), Spacer(1, 3 * mm),
               Paragraph(f"<b>Bottom line.</b> On time in {fc.get('on_time')}/{fc.get('years')} runs with the live forecast "
                         f"and {hs['on_time']}/{hs['years']} past years ({years_txt}), and "
                         f"{round(100 * (hs.get('probability_enso_weighted') or 0))}% weighted to this year's El Niño "
-                        f"(ONI {now.get('oni')}). Median passage {fc.get('days_median')} days with the forecast, "
-                        f"{hs['days_median']} days in past weather alone; slowest {hs['days_max']} days.", P),
+                        f"(ONI {now.get('oni')}). Median passage {D(fc.get('days_median'))} days with the forecast, "
+                        f"{D(hs['days_median'])} days in past weather alone; slowest {D(hs['days_max'])} days.", P),
               Spacer(1, 3 * mm)]
     rows = [["Option", "Median (d)", "10-90 % (d)", "Slowest", "On time", "Sailing", "Motor", "Fuel",
              "Typical arrival"]]
@@ -151,8 +157,8 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
         sm = v["summary"]
         t = typical_run(v["results"])
         typicals[k] = t
-        rows.append([f"<b>{k}</b>: {v['label']}", sm.get("days_median"), f"{sm.get('days_p10')}-{sm.get('days_p90')}",
-                     sm.get("days_max"), f"{sm.get('on_time')}/{sm.get('years')}", f"{sm.get('sailing_pct_median')}%",
+        rows.append([f"<b>{k}</b>: {v['label']}", D(sm.get("days_median")), DR(sm.get('days_p10'), sm.get('days_p90')),
+                     D(sm.get("days_max")), f"{sm.get('on_time')}/{sm.get('years')}", f"{sm.get('sailing_pct_median')}%",
                      f"{sm.get('motor_hours_median'):.0f} h", f"{sm.get('fuel_l_median')} L",
                      parse_iso(t["eta"]).strftime("%a %d %b %H:%M") if t else "-"])
     story += [Paragraph("Routing options (live forecast, fading into past years)", H2),
@@ -175,12 +181,12 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
         f_ = (cj.get("forecast") or {}).get("summary") or {}
         h_ = cj["summary"]
         slow = max(cj["results"], key=lambda r: r.get("days") or 0)
-        rows.append([lab, f"{f_.get('days_median')} d", f"{f_.get('days_p10')}-{f_.get('days_p90')}",
-                     f"{h_['days_median']} d", f"{h_['days_p10']}-{h_['days_p90']}", f"{slow['days']} d ({slow['year']})",
+        rows.append([lab, f"{D(f_.get('days_median'))} d", DR(f_.get('days_p10'), f_.get('days_p90')),
+                     f"{D(h_['days_median'])} d", DR(h_['days_p10'], h_['days_p90']), f"{D(slow['days'])} d ({slow['year']})",
                      f"{slow['margin_h']} h", f"{h_['on_time']}/{h_['years']}"])
     story += [Paragraph("How much the boat's pace matters (percentage of the Oyster 885 polar)", H2),
               Paragraph("ALIBI's logged history averages about 84% of polar overall and 79-82% broad reaching in the "
-                        "trades, so 80-85% is the realistic band.", P), Spacer(1, 2 * mm),
+                        "trades. With the G2 asymmetric spinnaker now aboard, 80-85% is the realistic band.", P), Spacer(1, 2 * mm),
               table(rows, [W * x for x in (.08, .12, .14, .13, .14, .15, .13, .11)]), PageBreak()]
 
     # ---- 3. how the model works
@@ -190,7 +196,8 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
     story += [Paragraph("How the model works", H2), Paragraph(
         "<b>Router.</b> An isochrone router steers ALIBI across the Atlantic on a weather grid, choosing headings "
         "every 4 hours from the polar, the wind, the sea state and the current, with a land mask. It motors at "
-        f"{s.get('motor_speed_kn')} kn when the wind is below {s.get('motor_wind_below_kn')} kn, within the fuel. "
+        f"{s.get('motor_speed_kn')} kn when the wind is below {s.get('motor_wind_below_kn')} kn, within the fuel consumption limitation "
+        f"(at most {s.get('motor_max_h'):.0f} h of motoring). "
         "<br/><b>Weather.</b> Four forecast models (ECMWF IFS, ECMWF AIFS, GFS, ICON) are blended, each weighted by "
         f"its measured accuracy along the route over the last 30 days ({st.get('weights_checks')} checks; {wtxt}). "
         f"The forecast is used alone at first; its weight then fades steadily to zero by day {hd[1]} of the "
@@ -208,7 +215,7 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
         r = by["85"][y]
         e = ey.get(str(y)) or {}
         rows.append([f"<b>{y}</b>" if (e.get("weight") or 0) >= 0.5 else y, f"{e.get('phase', '')} ({e.get('oni')})",
-                     e.get("weight"), r.get("days"), (by["80"].get(y) or {}).get("days"), 
+                     e.get("weight"), D(r.get("days")), D((by["80"].get(y) or {}).get("days")),
                      f"{r.get('margin_h')} h", r.get("motor_hours"), r.get("southmost_lat")])
     top = sorted(ey.items(), key=lambda kv: -(kv[1].get("weight") or 0))[:3]
     story += [Paragraph("El Niño and the past years", H2), Paragraph(
@@ -231,9 +238,9 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
             if not r:
                 row.append("-")
             elif k == "A" or not ra:
-                row.append(r["days"])
+                row.append(D(r["days"]))
             else:
-                row.append(f"{r['days']} ({round((r['days'] - ra['days']) * 24):+d} h)")
+                row.append(f"{D(r['days'])} ({round((r['days'] - ra['days']) * 24):+d} h)")
         rows.append(row)
     story += [Paragraph("Each option in each past year's own weather (no forecast)", H2),
               Paragraph("Hours are relative to option A, the fastest.", S), Spacer(1, 2 * mm), table(rows),
@@ -252,9 +259,10 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
         sm = st["strategies"][k]["summary"]
         hm = st["strategies"][k].get("history_summary") or {}
         story += [Paragraph(f"Option {k}: {st['strategies'][k]['label']}", H2), Paragraph(
-            f"With the forecast: median {sm.get('days_median')} days (10-90 %: {sm.get('days_p10')}-{sm.get('days_p90')}), "
-            f"slowest {sm.get('days_max')}, {sm.get('sailing_pct_median')}% sailing, {sm.get('motor_hours_median')} h motoring, "
-            f"{sm.get('fuel_l_median')} L. In past weather alone: median {hm.get('days_median')}, slowest {hm.get('days_max')}. "
+            f"With the forecast: median {D(sm.get('days_median'))} days (10-90 %: {DR(sm.get('days_p10'), sm.get('days_p90'))}), "
+            f"slowest {D(sm.get('days_max'))}, {sm.get('sailing_pct_median')}% sailing, {sm.get('motor_hours_median'):.0f} h of "
+            f"motoring, {sm.get('fuel_l_median')} L. In past weather alone: median {D(hm.get('days_median'))}, slowest "
+            f"{D(hm.get('days_max'))}. "
             + (f"Typical arrival {when(best['eta'])}." if best else ""), P), Spacer(1, 2 * mm)]
         if best:
             story.append(img(p, maxh=200 * mm))

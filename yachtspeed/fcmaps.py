@@ -358,7 +358,7 @@ def assumptions_md(info, cfg, strategies_json=None, climate_json=None) -> str:
     s = st.get("settings") or cl.get("settings") or {}
     lines += [f"- **Yacht:** polar {s.get('table')} x {s.get('polar_factor')}; 3 min per tack or gybe; motor at "
               f"{s.get('motor_speed_kn')} kn below {s.get('motor_wind_below_kn')} kn of wind (option D: below 7 kn), "
-              f"at most {s.get('motor_max_h')} h.",
+              f"at most {s.get('motor_max_h')} h of motoring within the fuel consumption limitation.",
               "- **Sea state:** ERA5 ocean waves for past years and wind-derived seas in the forecast; following seas "
               "add up to +3 % (surfing), head and beam seas slow her.",
               "- **Current:** mean surface current for these dates over 2022-2025.",
