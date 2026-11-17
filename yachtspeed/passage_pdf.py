@@ -186,11 +186,11 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
                           f"Modelo de travesía y opciones de ruta. Previsión emitida el {when(st['issued_utc'])}; "
                           f"elaborado el {built} UTC."), S), Spacer(1, 4 * mm),
               Paragraph(T(f"<b>Leaving</b> {fmt_dt(dep)} UTC. <b>Deadline</b> {fmt_dt(ddl)} UTC "
-                          f"(6 Dec 23:59 Antigua), {D(st['allowed_days'])} days. Polar {s.get('table')} x {pf}; "
+                          f"({fmt_dt(ddl - timedelta(hours=4))} Antigua time), {D(st['allowed_days'])} days. Polar {s.get('table')} x {pf}; "
                           f"motor at {mk} kn below {mw} kn of wind, "
                           f"at most {mh_:.0f} h of motoring within the fuel consumption limitation.",
                           f"<b>Salida</b> {fmt_dt(dep, lang)} UTC. <b>Fecha límite</b> {fmt_dt(ddl, lang)} UTC "
-                          f"(6 dic 23:59 hora de Antigua), {D(st['allowed_days'])} días. Polar {s.get('table')} x {pf}; "
+                          f"({fmt_dt(ddl - timedelta(hours=4), lang)} hora de Antigua), {D(st['allowed_days'])} días. Polar {s.get('table')} x {pf}; "
                           f"motor a {mk} nudos con menos de {mw} nudos de viento, "
                           f"como máximo {mh_:.0f} h a motor dentro del límite de consumo de combustible."), P),
               Spacer(1, 3 * mm),
@@ -479,6 +479,26 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
                       bottomMargin=15 * mm, title=T(f"{c85['yacht']} passage model", f"{c85['yacht']}: modelo de travesía")).build(story, onFirstPage=footer,
                                                                                         onLaterPages=footer)
     return out_pdf
+
+
+def build_if_stale(folder, prefix="alibi", force=False):
+    """Build climate_<prefix>_passage_en.pdf and _es.pdf in `folder` when any input is newer than the PDF.
+    Returns the paths built."""
+    folder = Path(folder)
+    inputs = [p for p in folder.glob(f"climate_{prefix}_*") if p.suffix in (".json", ".jpg", ".md")]
+    if not (folder / f"climate_{prefix}_strategies.json").exists() or not (folder / f"climate_{prefix}_antigua.json").exists():
+        return []
+    newest = max(p.stat().st_mtime for p in inputs)
+    built = []
+    for lang in ("en", "es"):
+        out = folder / f"climate_{prefix}_passage_{lang}.pdf"
+        if force or not out.exists() or out.stat().st_mtime < newest:
+            tmp = out.with_suffix(".tmp.pdf")
+            build(folder, tmp, name=f"{prefix}_antigua", strategies=f"{prefix}_strategies",
+                  maps=f"{prefix}_forecast", lang=lang)
+            tmp.replace(out)
+            built.append(str(out))
+    return built
 
 
 def _assumptions_es(st, c85, hd, yrs, now, top, mk, mw, mh_, pf, s):

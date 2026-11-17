@@ -11,6 +11,9 @@ OUT=/var/lib/yachtspeed/report
 
 runuser -u yachtspeed -- env YACHTSPEED_CONFIG=/etc/yachtspeed/config.toml \
   /opt/yachtspeed/.venv/bin/yachtspeed --plain-logs report --out "$OUT"
+# the passage PDFs (English and Spanish), rebuilt only when their inputs have changed
+runuser -u yachtspeed -- env YACHTSPEED_CONFIG=/etc/yachtspeed/config.toml \
+  /opt/yachtspeed/.venv/bin/yachtspeed --plain-logs passage-pdf --dir "$OUT" || echo "passage PDF build failed"
 
 as_owner() { runuser -u "$OWNER" -- env HOME="$OWNER_HOME" \
   GIT_SSH_COMMAND="ssh -i $KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" "$@"; }
@@ -20,7 +23,7 @@ if [ ! -d "$WORK/.git" ]; then
 fi
 rm -f "$WORK"/route_*.jpg "$WORK"/climate_*; rm -rf "$WORK/review"
 install -o "$OWNER" -m 644 "$OUT/report.json" "$OUT/report.md" "$WORK/"
-for f in "$OUT"/route_*.jpg "$OUT"/climate_*; do [ -e "$f" ] && install -o "$OWNER" -m 644 "$f" "$WORK/"; done
+for f in "$OUT"/route_*.jpg "$OUT"/climate_*; do [ -f "$f" ] || continue; case "$f" in *.tmp.pdf) continue;; esac; install -o "$OWNER" -m 644 "$f" "$WORK/"; done
 # screenshots OCR could not read, so they can be read by hand (deleted once captured)
 if compgen -G "$OUT/review/*.jpg" >/dev/null; then
   install -d -o "$OWNER" "$WORK/review"

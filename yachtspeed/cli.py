@@ -840,6 +840,14 @@ def cmd_polar_history(cfg, a):
     print(md)
 
 
+def cmd_passage_pdf(cfg, a):
+    """The passage write-up as PDFs (English and Spanish) from the published climate_* results."""
+    from . import passage_pdf
+
+    built = passage_pdf.build_if_stale(a.dir, a.prefix, force=a.force)
+    print("\n".join(built) if built else "PDFs up to date")
+
+
 def cmd_forecast_maps(cfg, a):
     """Forecast wind maps every few hours for the first days of a passage, plus the assumptions text."""
     from datetime import datetime as _dt, timezone as _tz
@@ -1165,6 +1173,12 @@ def build_parser():
     s.add_argument("--max-calls-per-day", type=int, default=1500)
     s.add_argument("--out-dir", default="/var/lib/yachtspeed/report")
     s.set_defaults(fn=cmd_polar_history)
+    s = sub.add_parser("passage-pdf", help="passage PDFs (English and Spanish) from the climate_* results")
+    s.add_argument("--dir", default="/var/lib/yachtspeed/report")
+    s.add_argument("--prefix", default="alibi")
+    s.add_argument("--force", action="store_true", help="rebuild even if up to date")
+    s.set_defaults(fn=cmd_passage_pdf)
+
     s = sub.add_parser("forecast-maps", help="forecast wind maps every few hours for the first days, plus assumptions")
     s.add_argument("--from", dest="frm", required=True)
     s.add_argument("--depart", required=True)

@@ -41,3 +41,10 @@ def test_assumptions_name_the_years_and_top_enso_years(tmp_path):
                                                  "2007": {"weight": 0.1}}}}))
     txt = fcmaps.assumptions_md({}, None, None, str(cl))
     assert "21 past years" in txt and "1997, 2006-2025" in txt and "1997 (0.993)" in txt and "2007" not in txt
+
+
+def test_passage_pdf_needs_its_inputs(tmp_path):
+    from yachtspeed import passage_pdf
+
+    assert passage_pdf.build_if_stale(tmp_path) == []  # nothing published yet: nothing built
+    assert passage_pdf.fmt_dt(datetime(2026, 12, 3, 10, 22), "es") == "jue 03 dic 10:22"
