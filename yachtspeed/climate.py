@@ -587,7 +587,7 @@ def run(conn, cfg, y, start, dest, depart: datetime, deadline: datetime, years, 
                   max_hours=max_days * 24, use_waves=waves, use_current=True, motor_wind_below_kn=motor_wind_below_kn,
                   motor_speed_kn=motor_speed_kn, motor_max_h=motor_max_h)
         if r.get("status") != "ok":
-            res_y = {"year": yr, "status": "no_route", "on_time": False}
+            res_y = {"year": yr, "status": "no_route", "on_time": False, "diagnostics": r.get("diagnostics")}
         else:
             hrs = r["hours"]
             winds = [p["tws_kn"] for p in r["track"] if p.get("tws_kn") is not None]
@@ -713,7 +713,7 @@ def run_forecast(conn, cfg, y, start, dest, depart, bbox, res, land, years, allo
                       motor_wind_below_kn=motor_wind_below_kn, motor_speed_kn=motor_speed_kn, motor_max_h=motor_max_h)
             pm = fc["per_model"][m]
             if r.get("status") != "ok":
-                pm["results"].append({"year": yr, "status": "no_route", "on_time": False})
+                pm["results"].append({"year": yr, "status": "no_route", "on_time": False, "diagnostics": r.get("diagnostics")})
             else:
                 pm["results"].append({"year": yr, "status": "ok", "days": round(r["hours"] / 24, 2),
                                       "on_time": r["hours"] <= allow_h, "margin_h": round(allow_h - r["hours"], 1),
@@ -725,7 +725,7 @@ def run_forecast(conn, cfg, y, start, dest, depart, bbox, res, land, years, allo
                   use_current=True, motor_wind_below_kn=motor_wind_below_kn, motor_speed_kn=motor_speed_kn,
                   motor_max_h=motor_max_h)
         if r.get("status") != "ok":
-            fc["results"].append({"year": yr, "status": "no_route", "on_time": False})
+            fc["results"].append({"year": yr, "status": "no_route", "on_time": False, "diagnostics": r.get("diagnostics")})
         else:
             fc["results"].append({"year": yr, "status": "ok", "eta": r["eta_utc"], "days": round(r["hours"] / 24, 2),
                                   "on_time": r["hours"] <= allow_h, "margin_h": round(allow_h - r["hours"], 1),
@@ -864,7 +864,7 @@ def run_strategies(conn, cfg, y, start, dest, depart, deadline, years, res=2.5, 
                 r = route(grid, land, start, t0, dest, y.speed_table or "cruiser27", y.polar_factor,
                           max_hours=max_days * 24, motor_max_h=cap, motor_early=st.get("motor_early"), **kw)
             if r.get("status") != "ok":
-                res_y = {"year": yr, "status": "no_route", "on_time": False}
+                res_y = {"year": yr, "status": "no_route", "on_time": False, "diagnostics": r.get("diagnostics")}
             else:
                 hrs = r["hours"]
                 res_y = {"year": yr, "status": "ok", "eta": r["eta_utc"], "days": round(hrs / 24, 2),
@@ -968,9 +968,11 @@ def strategies_jpeg(path, out, width=1800):
 
 def summarise(results, allow_h, weights=None) -> dict:
     ok = [r for r in results if r.get("status") == "ok"]
-    counted = [r for r in results if r.get("status") in ("ok", "no_route")]
+    # a route the router could not complete is a model failure, not a slow crossing: reported apart
+    counted = ok
+    failed = sum(1 for r in results if r.get("status") == "no_route")
     if not counted:
-        return {"years": 0}
+        return {"years": 0, "router_failures": failed}
     days = sorted(r["days"] for r in ok)
 
     def pct(p):
@@ -991,7 +993,8 @@ def summarise(results, allow_h, weights=None) -> dict:
         if en:
             extra["el_nino_like_years"] = len(en)
             extra["el_nino_like_on_time"] = sum(1 for r in en if r.get("on_time"))
-    return {**extra, "years": len(counted), "on_time": on, "probability": round(on / len(counted), 2),
+    return {**extra, "router_failures": failed, "years": len(counted), "on_time": on,
+            "probability": round(on / len(counted), 2),
             "allowed_days": round(allow_h / 24, 2), "days_median": pct(0.5), "days_p10": pct(0.1),
             "days_p90": pct(0.9), "days_min": days[0] if days else None, "days_max": days[-1] if days else None,
             "motor_hours_median": round(statistics.median(r["motor_hours"] for r in ok), 1) if ok else None,
@@ -1021,7 +1024,9 @@ def markdown(out) -> str:
                   f"**On time in {fs['on_time']} of {fs['years']} ({round(100 * fs['probability'])}%); "
                   f"El Nino-weighted {round(100 * (fs.get('probability_enso_weighted') or 0))}%.** "
                   f"Median {fs['days_median']} days (10-90 %: {fs['days_p10']}-{fs['days_p90']}), "
-                  f"{fs['motor_hours_median']} h motoring.", ""]
+                  f"{fs['motor_hours_median']} h motoring."
+                  + (f" ({fs['router_failures']} run(s) the router could not complete are left out.)"
+                     if fs.get("router_failures") else ""), ""]
         pm = fc.get("per_model") or {}
         if pm:
             lines += ["Each model's own forecast, then the same past years (how much the answer depends on "
