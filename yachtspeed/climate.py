@@ -743,7 +743,7 @@ DEFAULT_STRATEGIES = {
     "A": {"label": "fastest (router's choice)"},
     "B": {"label": "classic: south-west to 22N 30W first", "via": (22.0, -30.0)},
     "C": {"label": "fuel-saving: at most 30 h motoring in the first 72 h", "motor_early": (72.0, 30.0)},
-    "D": {"label": "more sailing: motor only below 6 kn of wind", "motor_below": 6.0},
+    "D": {"label": "more sailing: motor only below 7 kn of wind", "motor_below": 7.0},
     "E": {"label": "mostly sailing: at most 48 h motoring in all", "motor_max_h": 48.0},
 }
 
@@ -820,6 +820,9 @@ def run_strategies(conn, cfg, y, start, dest, depart, deadline, years, res=2.5, 
     blend.data_end_h = max(g.data_end_h for g in grids)
     fs, fe = fade_window(now, blend, depart, *fade)
     out["models_used"] = used
+    if wobj is not None:
+        out["model_weights"] = {f"{n} d ahead": {m: round(x * 100) for m, x in w.items()} for n, w in wobj.by_day.items()}
+        out["weights_checks"] = wobj.checks
     out["handover_day"] = [round((fs - depart).total_seconds() / 86400, 1), round((fe - depart).total_seconds() / 86400, 1)]
     md = depart.strftime("%m-%d")
     cfield = CurrentField(conn, wave_bbox(bbox, 5.0), 5.0, md)
@@ -886,6 +889,9 @@ def strategies_markdown(out) -> str:
              f"zero by day {out.get('handover_day', ['?', '?'])[1]}, with each past year's weather taking over. Polar {st['table']} x{st['polar_factor']}, motor at "
              f"{st['motor_speed_kn']} kn below {st['motor_wind_below_kn']} kn of wind, at most {st['motor_max_h']} h. "
              f"Status: {out['status']}.", "",
+             *( [f"Forecast model weights from past accuracy ({out.get('weights_checks')} checks): " + "; ".join(
+                 f"{lead}: " + ", ".join(f"{m} {p}%" for m, p in w.items()) for lead, w in out["model_weights"].items()), ""]
+                if out.get("model_weights") else []),
              "| Strategy | On time | Probability | El Nino-weighted | Median days | 10-90 % days | Slowest | Sailing | Median motoring | Median fuel |",
              "|---|---|---|---|---|---|---|---|---|---|"]
     for k, v in out["strategies"].items():

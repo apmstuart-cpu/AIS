@@ -628,7 +628,14 @@ def cmd_skill(cfg, a):
     from . import skill
 
     conn = _conn(cfg)
-    if not a.show:
+    if a.corridor:
+        from .speedtable import parse_destination
+
+        frm, to = a.corridor.split(":")
+        pts = skill.corridor_points(parse_destination(frm)[1], parse_destination(to)[1], n=a.points)
+        print(skill.verify_corridor(conn, _client(conn, cfg), pts, days=a.corridor_days,
+                                    progress=lambda m: print(" ", m, flush=True)))
+    elif not a.show:
         for st in skill.run_verification(conn, _client(conn, cfg), cfg, back_days=a.days):
             print(st)
     sc = skill.scores(conn, cfg.skill_window_days)
@@ -986,6 +993,9 @@ def build_parser():
     s = sub.add_parser("skill", help="verify the models' past wind forecasts; prints skill and blend weights")
     s.add_argument("--days", type=int, default=14, help="verify up to this many past days not yet done")
     s.add_argument("--show", action="store_true", help="only print scores and weights (no API calls)")
+    s.add_argument("--corridor", help="verify along a passage instead of at fleet fixes, e.g. rubicon:english-harbour")
+    s.add_argument("--corridor-days", type=int, default=30, help="how many past days to verify along the corridor")
+    s.add_argument("--points", type=int, default=12, help="points along the corridor")
     s.set_defaults(fn=cmd_skill)
     s = sub.add_parser("climate-fetch", help="download passage history into a file (run on another machine)")
     s.add_argument("--from", dest="frm", required=True)

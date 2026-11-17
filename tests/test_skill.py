@@ -166,3 +166,26 @@ def test_final_approach_is_left_out_of_polar_evidence():
     from yachtspeed.geo import parse_iso
     assert report.in_final_approach(parse_iso("2026-11-17T00:00:00Z"), arr)        # 9.4 h before: left out
     assert not report.in_final_approach(parse_iso("2026-11-16T12:00:00Z"), arr)    # 21 h before: kept
+
+
+def test_corridor_verification_and_long_lead_weights():
+    class RangeClient:
+        def _get(self, key, params):
+            d0 = datetime.fromisoformat(params["start_date"] + "T00:00:00+00:00")
+            d1 = datetime.fromisoformat(params["end_date"] + "T00:00:00+00:00")
+            n = int((d1 - d0).total_seconds() // 3600) + 24
+            times = [(d0 + timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M") for h in range(n)]
+            bias = 3.0 if params["models"].startswith("icon") else 0.5
+            h = {"time": times, "wind_speed_10m": [15.0] * n, "wind_direction_10m": [60.0] * n}
+            for k in skill.LEAD_DAYS:
+                h[f"wind_speed_10m_previous_day{k}"] = [15.0 + bias * k / 3] * n
+                h[f"wind_direction_10m_previous_day{k}"] = [60.0] * n
+            return {"hourly": h}
+
+    conn = connect(":memory:")
+    pts = skill.corridor_points((28.857, -13.817), (17.005, -61.765), n=3)
+    st = skill.verify_corridor(conn, RangeClient(), pts, days=5)
+    assert st["checks"] == 3 * 5 * 4 * 4 * len(skill.LEAD_DAYS)
+    w = skill.Weights(conn, ["ecmwf", "aifs", "gfs", "icon"], min_checks=10)
+    assert 7 in w.by_day and w.at_lead(6 * 24)["icon"] < w.at_lead(6 * 24)["ecmwf"]
+    assert abs(sum(w.at_lead(4 * 24).values()) - 1) < 1e-9

@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS arrivals (
 );
 """
 
-LEAD_DAYS = (1, 2, 3)
+LEAD_DAYS = (1, 2, 3, 5, 7)  # previous-runs API keeps forecasts issued up to 7 days earlier
 HOURS = (0, 6, 12, 18)
 
 
@@ -80,11 +80,11 @@ def fixes_for_day(conn, mmsis, day: str, tol_min=90):
     return out
 
 
-def _fetch_prev(client, model_id, lat, lon, day):
+def _fetch_prev(client, model_id, lat, lon, day, end_day=None):
     names = ["wind_speed_10m", "wind_direction_10m"]
     for n in LEAD_DAYS:
         names += [f"wind_speed_10m_previous_day{n}", f"wind_direction_10m_previous_day{n}"]
-    body = client._get("om_prev", {"latitude": lat, "longitude": lon, "start_date": day, "end_date": day,
+    body = client._get("om_prev", {"latitude": lat, "longitude": lon, "start_date": day, "end_date": end_day or day,
                                    "hourly": ",".join(names), "models": model_id, "wind_speed_unit": "kn",
                                    "timezone": "GMT"})
     h = body.get("hourly") or {}
@@ -138,6 +138,60 @@ def verify_day(conn, client, cfg, day: str, models=None) -> dict:
                     (t, p["mmsi"], m, n, p["lat"], p["lon"], round(tspd, 2), round(tdir), f[0], f[1],
                      round(math.hypot(mu - tu, mv - tv), 2), round(f[0] - tspd, 2), len(truth), iso(utcnow())))
                 stats["checks"] += 1
+    return stats
+
+
+def corridor_points(start, dest, n=12, trim=0.04):
+    """Points spread along a passage (straight in lat/lon), a little away from both ends' coasts."""
+    out = []
+    for i in range(n):
+        f = trim + (1 - 2 * trim) * i / (n - 1)
+        out.append((round(start[0] + (dest[0] - start[0]) * f, 2), round(start[1] + (dest[1] - start[1]) * f, 2)))
+    return out
+
+
+def verify_corridor(conn, client, points, days=30, models=None, progress=None) -> dict:
+    """Score each model's past forecasts (1-7 days ahead) along a passage corridor over the last `days`
+    days: one request per point and model covers the whole period. Truth is the consensus of the models'
+    latest-run analyses, as for the fleet checks. Raises QuotaExceeded."""
+    ensure_schema(conn)
+    models = models or list(MODELS)
+    end = (utcnow() - timedelta(days=1)).date()
+    start = end - timedelta(days=days - 1)
+    stats = {"points": len(points), "checks": 0, "errors": 0, "from": start.isoformat(), "to": end.isoformat()}
+    for la, lo in points:
+        data = {}
+        for m in models:
+            try:
+                data[m] = _fetch_prev(client, MODELS[m], la, lo, start.isoformat(), end.isoformat())
+            except FetchError:
+                stats["errors"] += 1
+                data[m] = {}
+        tag = f"corridor:{la:.2f},{lo:.2f}"
+        times = sorted({t for d in data.values() for t in d if parse_iso(t).hour in HOURS})
+        conn.execute("BEGIN")
+        for t in times:
+            truth = [data[m].get(t, {}).get(0) for m in models]
+            truth = [v for v in truth if v]
+            if len(truth) < 3:
+                continue
+            uvs = [_uv(*v) for v in truth]
+            tu, tv = sum(a for a, _ in uvs) / len(uvs), sum(b for _, b in uvs) / len(uvs)
+            tspd, tdir = _from_uv(tu, tv)
+            for m in models:
+                for n in LEAD_DAYS:
+                    f = data[m].get(t, {}).get(n)
+                    if not f:
+                        continue
+                    mu, mv = _uv(*f)
+                    conn.execute("INSERT OR REPLACE INTO model_skill VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                                 (t, tag, m, n, la, lo, round(tspd, 2), round(tdir), f[0], f[1],
+                                  round(math.hypot(mu - tu, mv - tv), 2), round(f[0] - tspd, 2), len(truth),
+                                  iso(utcnow())))
+                    stats["checks"] += 1
+        conn.execute("COMMIT")
+        if progress:
+            progress(f"{la:.1f},{lo:.1f}: {stats['checks']} checks so far")
     return stats
 
 
@@ -208,9 +262,12 @@ class Weights:
         self.now = utcnow()
 
     def at_lead(self, lead_h: float) -> dict:
-        d = min(3.0, max(1.0, lead_h / 24.0))
-        a, b = int(math.floor(d)), int(math.ceil(d))
-        f = d - a
+        """Weights at a lead time, interpolated between the verified lead days (held beyond the ends)."""
+        days = sorted(self.by_day)
+        d = min(days[-1], max(days[0], lead_h / 24.0))
+        a = max(x for x in days if x <= d)
+        b = min(x for x in days if x >= d)
+        f = 0.0 if b == a else (d - a) / (b - a)
         return {m: self.by_day[a][m] * (1 - f) + self.by_day[b][m] * f for m in self.models}
 
     def at(self, t: datetime) -> dict:
