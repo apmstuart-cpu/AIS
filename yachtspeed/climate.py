@@ -776,6 +776,7 @@ DEFAULT_STRATEGIES = {
     "C": {"label": "fuel-saving: at most 30 h motoring in the first 72 h", "motor_early": (72.0, 30.0)},
     "D": {"label": "more sailing: motor only below 7 kn of wind", "motor_below": 7.0},
     "E": {"label": "mostly sailing: at most 48 h motoring in all", "motor_max_h": 48.0},
+    "F": {"label": "via Cape Verde: round 17.5N 25.5W, north-west of Santo Antao", "via": (17.5, -25.5)},
 }
 
 
@@ -995,7 +996,7 @@ def strategies_markdown(out) -> str:
 
 
 STRATEGY_COLOURS = {"A": (200, 40, 40), "B": (20, 90, 190), "C": (30, 140, 70), "D": (210, 120, 0),
-                    "E": (120, 40, 150)}
+                    "E": (120, 40, 150), "F": (0, 150, 160)}
 
 
 def strategies_jpeg(path, out, width=1800):

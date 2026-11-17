@@ -18,7 +18,7 @@ from pathlib import Path
 
 from .geo import parse_iso
 
-OPTION_COLOURS = {"A": (200, 30, 40), "B": (20, 90, 190), "C": (30, 140, 70), "D": (230, 120, 0), "E": (120, 40, 150)}
+OPTION_COLOURS = {"A": (200, 30, 40), "B": (20, 90, 190), "C": (30, 140, 70), "D": (230, 120, 0), "E": (120, 40, 150), "F": (0, 150, 160)}
 
 
 def _load(folder, name):
@@ -253,7 +253,7 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
     # ---- 6. one page per option
     tmp = folder / "_option_maps"
     tmp.mkdir(exist_ok=True)
-    for k in keys:
+    for n, k in enumerate(keys):  # two options to a page
         p = tmp / f"option_{k}.jpg"
         best = option_map(st, k, p)
         sm = st["strategies"][k]["summary"]
@@ -265,8 +265,8 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
             f"{D(hm.get('days_max'))}. "
             + (f"Typical arrival {when(best['eta'])}." if best else ""), P), Spacer(1, 2 * mm)]
         if best:
-            story.append(img(p, maxh=200 * mm))
-        story.append(PageBreak())
+            story.append(img(p, maxh=98 * mm))
+        story.append(PageBreak() if n % 2 == 1 or n == len(keys) - 1 else Spacer(1, 5 * mm))
 
     # ---- appendices
     am = folder / f"climate_{maps}_assumptions.md"
@@ -287,7 +287,7 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
                   Paragraph("Skill-weighted blend of the four models every 3 h. Colours: wind strength (scale at the "
                             "top); white streaks flow with the wind; coloured lines and dots: each option's most "
                             "typical route and position at that hour (B is the traditional route south-west via "
-                            "22N 30W).", S), Spacer(1, 2 * mm), img(p, maxh=232 * mm)]
+                            "22N 30W; F goes via Cape Verde).", S), Spacer(1, 2 * mm), img(p, maxh=232 * mm)]
         if i < len(days) - 1:
             story.append(PageBreak())
 
