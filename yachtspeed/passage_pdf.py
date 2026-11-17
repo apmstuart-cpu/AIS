@@ -18,6 +18,7 @@ from pathlib import Path
 
 from .geo import parse_iso
 
+STRONG_ONI = 1.5  # a strong El Nino: Oct-Dec ONI at or above this
 OPTION_COLOURS = {"A": (200, 30, 40), "B": (20, 90, 190), "C": (30, 140, 70), "D": (230, 120, 0), "E": (120, 40, 150), "F": (0, 150, 160)}
 
 
@@ -217,6 +218,23 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
         rows.append([f"<b>{y}</b>" if (e.get("weight") or 0) >= 0.5 else y, f"{e.get('phase', '')} ({e.get('oni')})",
                      e.get("weight"), D(r.get("days")), D((by["80"].get(y) or {}).get("days")),
                      f"{r.get('margin_h')} h", r.get("motor_hours"), r.get("southmost_lat")])
+    strong = [y for y in yrs if ((ey.get(str(y)) or {}).get("oni") or 0) >= STRONG_ONI]
+
+    def mean(vals):
+        vals = [v for v in vals if v is not None]
+        return sum(vals) / len(vals) if vals else None
+
+    for lab, ys in (("<b>Average</b>", yrs), ("<b>Strong El Niño avg</b>", strong)):
+        if not ys:
+            continue
+        r85 = [by["85"][y] for y in ys]
+        m = mean([by["85"][y].get("margin_h") for y in ys])
+        mh = mean([r.get("motor_hours") for r in r85])
+        sl = mean([r.get("southmost_lat") for r in r85])
+        rows.append(["", lab, "", f"<b>{D(mean([r.get('days') for r in r85]))}</b>",
+                     f"<b>{D(mean([(by['80'].get(y) or {}).get('days') for y in ys]))}</b>",
+                     f"{m:.0f} h" if m is not None else "-", f"{mh:.0f}" if mh is not None else "-",
+                     f"{sl:.1f}" if sl is not None else "-"])
     top = sorted(ey.items(), key=lambda kv: -(kv[1].get("weight") or 0))[:3]
     story += [Paragraph("El Niño and the past years", H2), Paragraph(
         f"This autumn's ONI is {now.get('oni')} ({now.get('season')}), a strong El Niño. Each past year is weighted by how "
@@ -242,9 +260,27 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
             else:
                 row.append(f"{D(r['days'])} ({round((r['days'] - ra['days']) * 24):+d} h)")
         rows.append(row)
+    strong = [y for y in yrs if ((ey.get(str(y)) or {}).get("oni") or 0) >= STRONG_ONI]
+    for lab, ys in (("<b>Average</b>", yrs), ("<b>Strong El Niño avg</b>", strong)):
+        if not ys:
+            continue
+        row = [lab]
+        for k in keys:
+            both = [y for y in ys if y in hist[k] and y in hist["A"]]
+            dk = [hist[k][y]["days"] for y in ys if y in hist[k]]
+            if not dk:
+                row.append("-")
+                continue
+            avg = f"<b>{D(sum(dk) / len(dk))}</b>"
+            if k != "A" and both:
+                dh = sum((hist[k][y]["days"] - hist["A"][y]["days"]) * 24 for y in both) / len(both)
+                avg += f" ({dh:+.0f} h)"
+            row.append(avg)
+        rows.append(row)
     story += [Paragraph("Each option in each past year's own weather (no forecast)", H2),
-              Paragraph("Hours are relative to option A, the fastest.", S), Spacer(1, 2 * mm), table(rows),
-              Spacer(1, 4 * mm)]
+              Paragraph(f"Hours are relative to option A, the fastest. Strong El Niño years (Oct-Dec ONI of "
+                        f"{STRONG_ONI} or more): {', '.join(map(str, strong))}.", S), Spacer(1, 2 * mm),
+              table(rows, [W * 0.16] + [W * 0.84 / len(keys)] * len(keys)), Spacer(1, 4 * mm)]
     sj = folder / f"climate_{strategies}.jpg"
     if sj.exists():
         story += [Paragraph("All options together", H2), img(sj, maxh=120 * mm)]
