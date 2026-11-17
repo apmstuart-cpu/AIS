@@ -477,7 +477,7 @@ def merge(conn, path) -> dict:
 def run(conn, cfg, y, start, dest, depart: datetime, deadline: datetime, years, res=2.5, margin=4.0,
         max_days=28, step_h=4.0, heading_step=5, motor_wind_below_kn=None, motor_speed_kn=7.0, motor_max_h=None,
         maneuver_min=3.0, per_day=2500, per_hour=1200, per_minute=120, wait=True, out_path=None,
-        name="climate", forecast_models=None, fade=(6.0, 12.0), enso_sigma=1.0, currents=True,
+        name="climate", forecast_models=None, fade=(2.0, 15.0), enso_sigma=1.0, currents=True,
         current_res=5.0, fuel_note=None, per_model=True, waves=True, real_waves=True,
         forecast_only=False) -> dict:
     """Route `y` from `start` to `dest` leaving on `depart`'s month/day/time in each of `years`.
@@ -750,7 +750,7 @@ DEFAULT_STRATEGIES = {
 
 def run_strategies(conn, cfg, y, start, dest, depart, deadline, years, res=2.5, margin=4.0, max_days=28, step_h=4.0,
                    heading_step=5, maneuver_min=3.0, motor_wind_below_kn=None, motor_speed_kn=7.0, motor_max_h=None,
-                   models=("ecmwf", "aifs", "gfs", "icon"), fade=(6.0, 12.0), strategies=None, burn_lph=None,
+                   models=("ecmwf", "aifs", "gfs", "icon"), fade=(2.0, 15.0), strategies=None, burn_lph=None,
                    waves=True, out_path=None, enso_sigma=1.0) -> dict:
     """Compare routing strategies through the live forecast (skill-weighted blend, handing over to each past
     year's weather), using the history already stored. A waypoint strategy routes start -> waypoint -> destination,
@@ -882,8 +882,8 @@ def strategies_markdown(out) -> str:
     lines = [f"# {out['yacht']}: routing strategies", "",
              f"Leaving {parse_iso(out['depart']):%a %d %b %H:%M} UTC, deadline {parse_iso(out['deadline']):%d %b %H:%M} UTC. "
              f"Forecast issued {parse_iso(out['issued_utc']):%d %b %H:%M} UTC ({', '.join(out.get('models_used', []))}, "
-             f"blended), alone to day {out.get('handover_day', ['?'])[0]}, then handing over to each past year by day "
-             f"{out.get('handover_day', ['?', '?'])[1]}. Polar {st['table']} x{st['polar_factor']}, motor at "
+             f"blended), its weight fading steadily from day {out.get('handover_day', ['?'])[0]} of the passage to "
+             f"zero by day {out.get('handover_day', ['?', '?'])[1]}, with each past year's weather taking over. Polar {st['table']} x{st['polar_factor']}, motor at "
              f"{st['motor_speed_kn']} kn below {st['motor_wind_below_kn']} kn of wind, at most {st['motor_max_h']} h. "
              f"Status: {out['status']}.", "",
              "| Strategy | On time | Probability | El Nino-weighted | Median days | 10-90 % days | Slowest | Sailing | Median motoring | Median fuel |",
@@ -1009,9 +1009,9 @@ def markdown(out) -> str:
     fs = fc.get("summary") or {}
     if fs.get("years"):
         lines += [f"## With the live forecast (issued {parse_iso(fc['issued_utc']):%d %b %H:%M} UTC)", "",
-                  f"Forecast ({', '.join(fc.get('models_used', []))}, skill-weighted blend) alone to day "
-                  f"{(fc.get('handover_day') or ['?'])[0]} of the passage, handing over gradually to each past "
-                  f"year's weather by day {(fc.get('handover_day') or ['?', '?'])[1]}.", "",
+                  f"Forecast ({', '.join(fc.get('models_used', []))}, skill-weighted blend), its weight fading steadily "
+                  f"from day {(fc.get('handover_day') or ['?'])[0]} of the passage to zero by day "
+                  f"{(fc.get('handover_day') or ['?', '?'])[1]}, with each past year's weather taking over.", "",
                   f"**On time in {fs['on_time']} of {fs['years']} ({round(100 * fs['probability'])}%); "
                   f"El Nino-weighted {round(100 * (fs.get('probability_enso_weighted') or 0))}%.** "
                   f"Median {fs['days_median']} days (10-90 %: {fs['days_p10']}-{fs['days_p90']}), "

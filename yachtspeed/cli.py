@@ -738,6 +738,7 @@ def cmd_strategies(cfg, a):
     out = climate.run_strategies(conn, cfg, y, start, dest, depart, deadline, list(range(y0, y1 + 1)),
                                  motor_wind_below_kn=a.motor_below, motor_speed_kn=a.motor_speed,
                                  motor_max_h=motor_max_h, strategies=strategies, burn_lph=a.burn_lph,
+                                 fade=(a.fade_from, a.fade_to),
                                  out_path=str(_P(a.out_dir) / f"climate_{a.name}.json"))
     print(climate.strategies_markdown(out))
 
@@ -1013,6 +1014,8 @@ def build_parser():
     s.add_argument("--genset-lph", type=float, default=2.0)
     s.add_argument("--fuel-reserve", type=float, default=0.10)
     s.add_argument("--polar-factor", type=float, default=None)
+    s.add_argument("--fade-from", type=float, default=2.0, help="forecast weight starts fading (days after issue)")
+    s.add_argument("--fade-to", type=float, default=15.0, help="history only from this many days after issue")
     s.add_argument("--name", default="strategies")
     s.add_argument("--out-dir", default="/var/lib/yachtspeed/report")
     s.set_defaults(fn=cmd_strategies)
@@ -1040,8 +1043,10 @@ def build_parser():
     s.add_argument("--no-wait", action="store_true", help="stop at the API's daily limit instead of waiting")
     s.add_argument("--forecast-models", default="ecmwf,aifs,gfs,icon",
                    help="live forecast for the first part of the passage ('' = past weather only)")
-    s.add_argument("--fade-from", type=float, default=6.0, help="forecast only up to this many days ahead")
-    s.add_argument("--fade-to", type=float, default=12.0, help="history only from this many days ahead")
+    s.add_argument("--fade-from", type=float, default=2.0,
+                   help="forecast weight starts fading this many days after it was issued")
+    s.add_argument("--fade-to", type=float, default=15.0,
+                   help="...and reaches zero (history only) this many days after it was issued")
     s.add_argument("--enso-sigma", type=float, default=1.0, help="El Nino weighting width (ONI units)")
     s.add_argument("--fuel-l", type=float, default=None, help="fuel on board (litres); sets --motor-max-h")
     s.add_argument("--burn-lph", type=float, default=25.0, help="litres per hour when motoring")
