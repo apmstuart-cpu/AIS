@@ -941,7 +941,7 @@ def strategies_jpeg(path, out, width=1800):
         return None
     lats = [p[1] for _, r in allr for p in r["track"]] + [out["to"][0]]
     lons = [p[2] for _, r in allr for p in r["track"]] + [out["to"][1]]
-    img, d, xy, (f_s, f_m, f_l), (w, h, top) = _basemap(lats, lons, width)
+    img, d, xy, (f_s, f_m, f_l), (w, h, top) = _basemap(lats, lons, width, top=130)
     for k, r in allr:
         col = STRATEGY_COLOURS.get(k, (90, 90, 90))
         d.line([xy(p[1], p[2]) for p in r["track"]], fill=col, width=1)
@@ -956,12 +956,16 @@ def strategies_jpeg(path, out, width=1800):
     d.rectangle([0, 0, w, top], fill=(255, 255, 255))
     d.text((16, 10), f"{out['yacht']}: routing strategies, leaving {parse_iso(out['depart']):%a %d %b} "
                      f"(forecast {parse_iso(out['issued_utc']):%d %b %H:%M}Z, then past years)", fill=(30, 30, 40), font=f_l)
-    x = 16
+    x, yy = 16, 52
     for k, v in out["strategies"].items():
         s = v.get("summary") or {}
-        lab = f"{k}: {v['label']} - median {s.get('days_median')} d, {s.get('on_time')}/{s.get('years')} on time"
-        d.text((x, 60), lab, fill=STRATEGY_COLOURS.get(k, (90, 90, 90)), font=f_s)
-        x += int(d.textlength(lab, font=f_s)) + 30
+        lab = (f"{k}: {v['label']} - median {s.get('days_median')} d, sailing {s.get('sailing_pct_median', '-')}%, "
+               f"{s.get('on_time')}/{s.get('years')} on time")
+        wlab = int(d.textlength(lab, font=f_s)) if hasattr(d, "textlength") else 9 * len(lab)
+        if x + wlab > w - 16:
+            x, yy = 16, yy + 24
+        d.text((x, yy), lab, fill=STRATEGY_COLOURS.get(k, (90, 90, 90)), font=f_s)
+        x += wlab + 30
     img.save(path, "JPEG", quality=88, optimize=True)
     return path
 
