@@ -453,12 +453,15 @@ def fetch_only(conn, start, dest, depart: datetime, years, res=2.5, margin=4.0, 
                     time.sleep(max(5.0, pause + 5))
 
 
-MERGE_TABLES = ("climate_wind", "climate_cells", "climate_wave", "climate_wave_cells")
+MERGE_TABLES = ("climate_wind", "climate_cells", "climate_wave", "climate_wave_cells", "hist_wx", "hist_wx_done")
 
 
 def merge(conn, path) -> dict:
     """Add another machine's downloaded history (a climate-fetch database) to this one."""
+    from .history import SQL as HSQL
+
     conn.executescript(SQL)
+    conn.executescript(HSQL)
     conn.execute("ATTACH DATABASE ? AS other", (path,))
     out = {}
     try:

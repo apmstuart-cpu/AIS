@@ -47,3 +47,27 @@ def test_import_and_analyse_history(tmp_path, monkeypatch):
     o = res["overall"]
     assert o and o["points"] >= 30 and 50 < o["median_pct"] < 100  # 7 kn in 14 kn at TWA ~165
     assert "| 12-16 kn |" in history.markdown(res)
+
+
+def test_jobs_fetched_elsewhere_then_merged(tmp_path, monkeypatch):
+    from yachtspeed import climate
+
+    start = datetime(2025, 8, 10, 6, tzinfo=timezone.utc)
+    gpx = tmp_path / "t.gpx"
+    _gpx(gpx, start, 1800)
+    server = connect(str(tmp_path / "server.db"))
+    history.import_gpx(server, str(gpx), "1")
+    jobs, ncells = history.needed_jobs(server, "1")
+    assert jobs and all(j[0] in ("wind", "marine") for j in jobs)
+
+    def fake_fetch(self, provider, kind, lat, lon, s, e):
+        return [{"time_utc": s + "T06:00:00Z", "wind_speed_kn": 12.0, "wind_dir_from_deg": 40.0,
+                 "wave_height_m": 1.0, "wave_dir_from_deg": 40.0, "wave_period_s": 7.0,
+                 "current_speed_kn": 0.1, "current_dir_to_deg": 200.0}]
+
+    monkeypatch.setattr(weather.OpenMeteo, "fetch", fake_fetch)
+    mac = connect(str(tmp_path / "mac.db"))
+    history.fetch_jobs(mac, weather.OpenMeteo(weather.Budget(mac, 10 ** 6, 10 ** 6, 10 ** 6)), jobs)
+    added = climate.merge(server, str(tmp_path / "mac.db"))
+    assert added["hist_wx_done"] == len(jobs)
+    assert history.needed_jobs(server, "1")[0] == []

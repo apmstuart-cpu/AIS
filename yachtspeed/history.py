@@ -99,28 +99,33 @@ def _cell(x):
     return round(math.floor(x / CELL) * CELL + CELL / 2, 3)
 
 
-def fetch_weather(conn, client, mmsi, since=None, progress=None):
-    """ERA5 wind and the marine archive (waves, current) for every 0.5 deg cell and month the track
-    passes through. Raises QuotaExceeded when the budget is spent (rerun to resume)."""
+def needed_jobs(conn, mmsi, since=None):
+    """(kind, cell_lat, cell_lon, month) of weather the track needs and the store lacks."""
     conn.executescript(SQL)
     q = "SELECT time_utc, lat, lon FROM track_points WHERE mmsi=?" + (" AND time_utc>=?" if since else "")
     need = {}
     for r in conn.execute(q, (mmsi, since) if since else (mmsi,)):
         need.setdefault((_cell(r[1]), _cell(r[2])), set()).add(r[0][:7])
     done = {(k, round(a, 3), round(b, 3), m) for k, a, b, m in conn.execute("SELECT * FROM hist_wx_done")}
-    jobs = [(kind, c, m) for c, months in need.items() for m in sorted(months) for kind in ("wind", "marine")
-            if (kind, c[0], c[1], m) not in done]
-    if progress:
-        progress(f"{len(need)} cells, {len(jobs)} cell-months still to fetch")
-    for i, (kind, (la, lo), month) in enumerate(jobs):
+    return [(kind, c[0], c[1], m) for c, months in need.items() for m in sorted(months) for kind in ("wind", "marine")
+            if (kind, c[0], c[1], m) not in done], len(need)
+
+
+def fetch_jobs(conn, client, jobs, progress=None):
+    """Fetch weather jobs (from needed_jobs) into hist_wx; raises QuotaExceeded when the budget is spent."""
+    from .weather import FetchError
+
+    conn.executescript(SQL)
+    done = {(k, round(a, 3), round(b, 3), m) for k, a, b, m in conn.execute("SELECT * FROM hist_wx_done")}
+    jobs = [tuple(j) for j in jobs if (j[0], round(j[1], 3), round(j[2], 3), j[3]) not in done]
+    for i, (kind, la, lo, month) in enumerate(jobs):
         y, mo = int(month[:4]), int(month[5:7])
         start = datetime(y, mo, 1)
-        end = (datetime(y + (mo == 12), mo % 12 + 1, 1) - timedelta(days=1))
-        end = min(end, (utcnow() - timedelta(days=6)).replace(tzinfo=None)) if kind == "wind" else end
+        end = datetime(y + (mo == 12), mo % 12 + 1, 1) - timedelta(days=1)
+        if kind == "wind":
+            end = min(end, (utcnow() - timedelta(days=6)).replace(tzinfo=None))
         rows = []
         if end >= start:
-            from .weather import FetchError
-
             try:
                 rows = client.fetch("om_era5" if kind == "wind" else "om_marine", kind, la, lo,
                                     start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"))
@@ -140,6 +145,15 @@ def fetch_weather(conn, client, mmsi, since=None, progress=None):
         conn.execute("COMMIT")
         if progress and (i + 1) % 50 == 0:
             progress(f"fetched {i + 1}/{len(jobs)}")
+
+
+def fetch_weather(conn, client, mmsi, since=None, progress=None):
+    """ERA5 wind and the marine archive (waves, current) for every 0.5 deg cell and month the track
+    passes through. Raises QuotaExceeded when the budget is spent (rerun to resume)."""
+    jobs, ncells = needed_jobs(conn, mmsi, since)
+    if progress:
+        progress(f"{ncells} cells, {len(jobs)} cell-months still to fetch")
+    fetch_jobs(conn, client, jobs, progress)
 
 
 def analyse(conn, y, since=None, min_tws=8.0, min_twa=40.0, max_ratio=1.3, every_min=10) -> dict:

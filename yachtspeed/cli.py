@@ -759,6 +759,36 @@ def cmd_import_gpx(cfg, a):
                              progress=lambda m: print(" ", m, flush=True)))
 
 
+def cmd_history_jobs(cfg, a):
+    """Write the weather the track history still needs, for history-fetch on another machine."""
+    from . import history
+
+    conn = _conn(cfg)
+    jobs, ncells = history.needed_jobs(conn, _mmsi(cfg, a.yacht), a.since)
+    with open(a.out, "w") as f:
+        json.dump(jobs, f)
+    print(f"{len(jobs)} cell-months over {ncells} cells written to {a.out}")
+
+
+def cmd_history_fetch(cfg, a):
+    """Fetch a jobs file's weather into a database file (run where there is API allowance), then
+    climate-merge it on the server."""
+    from . import history
+    from .weather import Budget, OpenMeteo, QuotaExceeded
+
+    conn = db.connect(a.db)
+    with open(a.jobs) as f:
+        jobs = json.load(f)
+    client = OpenMeteo(Budget(conn, 150, 2500, a.max_calls_per_day))
+    print(f"{len(jobs)} cell-months to fetch", flush=True)
+    try:
+        history.fetch_jobs(conn, client, jobs, progress=lambda m: print(" ", m, flush=True))
+    except QuotaExceeded as e:
+        print(f"stopped at the API allowance ({e}); copy what is done, or rerun later to continue", flush=True)
+    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    print(f"saved to {a.db}: copy it to the server and run `yachtspeed climate-merge <file>` there")
+
+
 def cmd_polar_history(cfg, a):
     """The yacht's imported track history against her polar, with historical wind, waves and current."""
     from pathlib import Path as _P
@@ -1082,6 +1112,16 @@ def build_parser():
     s.add_argument("--every", type=int, default=60, help="keep one point per this many seconds")
     s.add_argument("--source", default="gpx")
     s.set_defaults(fn=cmd_import_gpx)
+    s = sub.add_parser("history-jobs", help="list the weather the track history still needs (for history-fetch)")
+    s.add_argument("--yacht", required=True)
+    s.add_argument("--since")
+    s.add_argument("--out", default="/tmp/history_jobs.json")
+    s.set_defaults(fn=cmd_history_jobs)
+    s = sub.add_parser("history-fetch", help="fetch a history-jobs file's weather into a database file (another machine)")
+    s.add_argument("--jobs", required=True)
+    s.add_argument("--db", default="history.db")
+    s.add_argument("--max-calls-per-day", type=int, default=3000)
+    s.set_defaults(fn=cmd_history_fetch)
     s = sub.add_parser("polar-history", help="the imported track history against the polar (historical weather)")
     s.add_argument("--yacht", required=True)
     s.add_argument("--since", help="only from this date (YYYY-MM-DD)")
