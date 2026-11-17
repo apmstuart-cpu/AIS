@@ -287,7 +287,7 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
                   Paragraph("Skill-weighted blend of the four models every 3 h. Colours: wind strength (scale at the "
                             "top); white streaks flow with the wind; coloured lines and dots: each option's most "
                             "typical route and position at that hour (B is the traditional route south-west via "
-                            "22N 30W)."), S), Spacer(1, 2 * mm), img(p, maxh=232 * mm)]
+                            "22N 30W).", S), Spacer(1, 2 * mm), img(p, maxh=232 * mm)]
         if i < len(days) - 1:
             story.append(PageBreak())
 
