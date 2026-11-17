@@ -385,7 +385,7 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
               Paragraph(T(f"Hours are relative to option A, the fastest. Strong El Niño years (Oct-Dec ONI of "
                           f"{STRONG_ONI} or more): {', '.join(map(str, strong))}.",
                           f"Las horas son respecto a la opción A, la más rápida. Años de El Niño fuerte (ONI oct-dic de "
-                          f"{STRONG_ONI} o más): {', '.join(map(str, strong))}."), S), Spacer(1, 2 * mm),
+                          f"{N(STRONG_ONI)} o más): {', '.join(map(str, strong))}."), S), Spacer(1, 2 * mm),
               table(rows, [W * 0.16] + [W * 0.84 / len(keys)] * len(keys)), Spacer(1, 4 * mm)]
     sj = folder / f"climate_{strategies}.jpg"
     if sj.exists():
