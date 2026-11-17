@@ -750,6 +750,53 @@ def cmd_strategies(cfg, a):
     print(climate.strategies_markdown(out))
 
 
+def cmd_import_gpx(cfg, a):
+    from . import history
+
+    conn = _conn(cfg)
+    mmsi = _mmsi(cfg, a.yacht)
+    print(history.import_gpx(conn, a.file, mmsi, every_s=a.every, source=a.source,
+                             progress=lambda m: print(" ", m, flush=True)))
+
+
+def cmd_polar_history(cfg, a):
+    """The yacht's imported track history against her polar, with historical wind, waves and current."""
+    from pathlib import Path as _P
+
+    from . import history
+    from .weather import Budget, OpenMeteo, QuotaExceeded
+
+    conn = _conn(cfg)
+    mmsi = _mmsi(cfg, a.yacht)
+    y = next((y for y in cfg.fleet if y.mmsi == mmsi), None)
+    if y is None or not y.speed_table:
+        sys.exit("yacht not in config, or it has no speed_table")
+    if a.speed_table:
+        y.speed_table = a.speed_table
+    if not a.no_fetch:
+        client = OpenMeteo(Budget(conn, 120, 1000, a.max_calls_per_day))
+        while True:
+            try:
+                history.fetch_weather(conn, client, mmsi, since=a.since, progress=lambda m: print(" ", m, flush=True))
+                break
+            except QuotaExceeded as e:
+                wait = (e.resume_at - utcnow()).total_seconds()
+                print(f"  weather allowance reached; waiting until {iso(e.resume_at)}", flush=True)
+                if wait > 26 * 3600:
+                    sys.exit("stopped: rerun later to resume")
+                import time as _time
+
+                _time.sleep(max(5, wait + 5))
+    res = history.analyse(conn, y, since=a.since, min_tws=a.min_tws, min_twa=a.min_twa)
+    md = history.markdown(res)
+    out = _P(a.out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    slug = "".join(c if c.isalnum() else "_" for c in y.name.lower())
+    (out / f"climate_{slug}_polar_history.json").write_text(json.dumps(res, indent=1, default=str))
+    (out / f"climate_{slug}_polar_history.md").write_text(md)
+    print(md)
+
+
 def cmd_climate_merge(cfg, a):
     from . import climate
 
@@ -1029,6 +1076,22 @@ def build_parser():
     s.add_argument("--name", default="strategies")
     s.add_argument("--out-dir", default="/var/lib/yachtspeed/report")
     s.set_defaults(fn=cmd_strategies)
+    s = sub.add_parser("import-gpx", help="import a plotter/TimeZero GPX track history (any size) for polar analysis")
+    s.add_argument("file")
+    s.add_argument("--yacht", required=True)
+    s.add_argument("--every", type=int, default=60, help="keep one point per this many seconds")
+    s.add_argument("--source", default="gpx")
+    s.set_defaults(fn=cmd_import_gpx)
+    s = sub.add_parser("polar-history", help="the imported track history against the polar (historical weather)")
+    s.add_argument("--yacht", required=True)
+    s.add_argument("--since", help="only from this date (YYYY-MM-DD)")
+    s.add_argument("--speed-table")
+    s.add_argument("--min-tws", type=float, default=8.0)
+    s.add_argument("--min-twa", type=float, default=40.0)
+    s.add_argument("--no-fetch", action="store_true", help="use only the weather already stored")
+    s.add_argument("--max-calls-per-day", type=int, default=1500)
+    s.add_argument("--out-dir", default="/var/lib/yachtspeed/report")
+    s.set_defaults(fn=cmd_polar_history)
     s = sub.add_parser("climate-merge", help="add a climate-fetch file's history to this server's store")
     s.add_argument("file")
     s.set_defaults(fn=cmd_climate_merge)
