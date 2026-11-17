@@ -479,11 +479,12 @@ def _assumptions_es(st, c85, hd, yrs, now, top, mk, mw, mh_, pf, s):
         lead_es = lead.replace(" d ahead", " d de antelación")
         lines.append(f"{lead_es}: " + ", ".join(f"{m} {p} %" for m, p in ws.items()))
     lines += [f"<b>De la previsión a los años anteriores:</b> el peso de la previsión disminuye de forma gradual desde "
-              f"2 días después de su emisión hasta cero a los 15 días; en esta simulación, desde el día {hd[0]} hasta el día "
-              f"{hd[1]} de la travesía. Después toma el relevo el tiempo de cada uno de {len(yrs)} años anteriores (ERA5): "
+              f"2 días después de su emisión hasta cero a los 15 días; en esta simulación, desde el día "
+              f"{str(hd[0]).replace('.', ',')} hasta el día {str(hd[1]).replace('.', ',')} de la travesía. Después toma el relevo el tiempo de cada uno de {len(yrs)} años anteriores (ERA5): "
               f"{len(yrs)} desenlaces posibles.",
-              f"<b>Ponderación por El Niño:</b> ONI {now.get('oni')} ({now.get('season')}); cada año anterior se pondera "
-              "según lo parecido que fue su ONI de oct-dic (" + ", ".join(f"{y} ({v.get('weight')})" for y, v in top) +
+              f"<b>Ponderación por El Niño:</b> ONI {str(now.get('oni')).replace('.', ',')} ({now.get('season')}); cada "
+              "año anterior se pondera según lo parecido que fue su ONI de oct-dic ("
+              + ", ".join(f"{y} ({str(v.get('weight')).replace('.', ',')})" for y, v in top) +
               " los que más).",
               f"<b>Barco:</b> polar {s.get('table')} x {pf}; 3 min por virada o trasluchada; motor a {mk} nudos con menos "
               f"de {mw} nudos de viento (opción D: menos de 7 nudos), como máximo {mh_:.0f} h a motor dentro del límite de "
