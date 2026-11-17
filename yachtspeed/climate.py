@@ -411,14 +411,39 @@ class ClimateGrid(WeatherGrid):
             (self.year, lat, lon, iso(self.t0 - timedelta(hours=3)), iso(self.t_end + timedelta(hours=3)))).fetchall()
 
 
-def _thin(track, every_h=6.0):
-    out, last = [], None
+def _thin(track, every_h=6.0, land=None):
+    """Keep a point every `every_h` hours. With a land mask, also keep any point the router passed
+    through where the straight line between kept points would cut across land (round an island), so
+    the drawn route goes where the boat went."""
+    def row(p):
+        return [p["time_utc"], p["lat"], p["lon"], bool(p.get("motor"))]
+
+    out, last, prev = [], None, None
     for p in track:
         t = parse_iso(p["time_utc"])
         if last is None or (t - last).total_seconds() >= every_h * 3600 - 60 or p is track[-1]:
-            out.append([p["time_utc"], p["lat"], p["lon"], bool(p.get("motor"))])
+            if (land is not None and out and prev is not None and prev is not p and out[-1][0] != prev["time_utc"]
+                    and not land.segment_clear(out[-1][1], out[-1][2], p["lat"], p["lon"],
+                                               skip_near=[(track[0]["lat"], track[0]["lon"]),
+                                                          (track[-1]["lat"], track[-1]["lon"])], skip_nm=3)):
+                out.extend(_corner(track, out[-1], p, land))
+            out.append(row(p))
             last = t
+        prev = p
     return out
+
+
+def _corner(track, a, b, land):
+    """The router's own points between kept point `a` and point `b`, thinned to the fewest that keep
+    every straight piece off land."""
+    mid = [p for p in track if a[0] < p["time_utc"] < b["time_utc"]]
+    keep, cur = [], a
+    for i, p in enumerate(mid):
+        nxt = mid[i + 1] if i + 1 < len(mid) else b
+        if not land.segment_clear(cur[1], cur[2], nxt["lat"], nxt["lon"]):
+            keep.append([p["time_utc"], p["lat"], p["lon"], bool(p.get("motor"))])
+            cur = keep[-1]
+    return keep
 
 
 def fetch_only(conn, start, dest, depart: datetime, years, res=2.5, margin=4.0, max_days=28, waves=True,
@@ -600,7 +625,7 @@ def run(conn, cfg, y, start, dest, depart: datetime, deadline: datetime, years, 
                      "motor_hours": r.get("motor_hours", 0.0),
                      "wind_median_kn": round(statistics.median(winds), 1) if winds else None,
                      "southmost_lat": round(min(p["lat"] for p in r["track"]), 1),
-                     "track": _thin(r["track"])}
+                     "track": _thin(r["track"], land=land)}
         res_y["waves"] = "era5" if real else ("wind" if waves else "none")
         res_y["route_seconds"] = round(time.time() - t_run)
         return res_y
@@ -735,7 +760,7 @@ def run_forecast(conn, cfg, y, start, dest, depart, bbox, res, land, years, allo
                                   "sailed_nm": r["sailed_nm"], "avg_kn": r["avg_sog_kn"],
                                   "motor_hours": r.get("motor_hours", 0.0),
                                   "southmost_lat": round(min(p["lat"] for p in r["track"]), 1),
-                                  "track": _thin(r["track"])})
+                                  "track": _thin(r["track"], land=land)})
         if save_cb:
             save_cb()
     fc["status"] = "complete"
@@ -874,7 +899,7 @@ def run_strategies(conn, cfg, y, start, dest, depart, deadline, years, res=2.5, 
                          "on_time": hrs <= allow_h, "margin_h": round(allow_h - hrs, 1), "sailed_nm": r["sailed_nm"],
                          "motor_hours": round(r.get("motor_hours", 0.0), 1),
                          "sailing_pct": round(100 * (1 - r.get("motor_hours", 0.0) / hrs)) if hrs else None,
-                         "track": _thin(r["track"])}
+                         "track": _thin(r["track"], land=land)}
             out["strategies"][key][bucket].append(res_y)
             log(logger, logging.INFO, "strategy_year", strategy=key, basis=bucket, year=yr, days=res_y.get("days"))
         save()

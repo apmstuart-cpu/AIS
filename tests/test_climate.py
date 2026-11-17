@@ -234,3 +234,17 @@ def test_typical_run_ignores_a_southern_outlier():
 
     runs = [run(13.5, 0.0), run(13.6, 0.3), run(13.4, -0.2), run(13.0, -6.0), run(13.8, 0.1)]
     assert climate.typical_run(runs)["days"] in (13.5, 13.8, 13.6)  # not the 13.0-day outlier
+
+
+def test_thin_keeps_the_corner_round_an_island():
+    from yachtspeed.land import mask_for_bbox
+
+    land = mask_for_bbox((27.0, -19.5, 30.0, -13.0))
+    t0 = datetime(2026, 11, 20, 10, tzinfo=timezone.utc)
+    # hourly points rounding the north of La Palma (about 28.85N, 17.85W) at 29.1N, then dropping south-west
+    pts = [(28.98, -17.0), (29.05, -17.3), (29.1, -17.6), (29.1, -17.9), (29.0, -18.2), (28.8, -18.45), (28.58, -18.6)]
+    tr = [{"time_utc": (t0 + timedelta(hours=i)).strftime("%Y-%m-%dT%H:%M:%SZ"), "lat": la, "lon": lo}
+          for i, (la, lo) in enumerate(pts)]
+    thin = climate._thin(tr, every_h=6.0, land=land)
+    assert all(land.segment_clear(a[1], a[2], b[1], b[2]) for a, b in zip(thin, thin[1:]))
+    assert len(thin) > 2 and len(climate._thin(tr, every_h=6.0)) == 2
