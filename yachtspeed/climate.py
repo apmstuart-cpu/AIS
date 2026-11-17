@@ -416,7 +416,7 @@ def _thin(track, every_h=6.0):
 
 
 def fetch_only(conn, start, dest, depart: datetime, years, res=2.5, margin=4.0, max_days=28, waves=True,
-               per_day=3000, per_hour=1500, per_minute=150, progress=print):
+               per_day=3000, per_hour=1500, per_minute=150, progress=print, wind=True):
     """Download history (wind, and ERA5 waves) for `years` into `conn`, exactly as `run` would, so it
     can be fetched from another machine (its own API allowance) and merged on the server."""
     from .router import grid_bbox
@@ -432,7 +432,7 @@ def fetch_only(conn, start, dest, depart: datetime, years, res=2.5, margin=4.0, 
         s_date, e_date = d0.strftime("%Y-%m-%d"), (t_end + timedelta(days=1)).strftime("%Y-%m-%d")
         for what, fn, n in (("wind", lambda: fetch_year(conn, client, yr, cells, s_date, e_date), len(cells)),
                             ("waves", lambda: fetch_waves_year(conn, client, yr, wcells, s_date, e_date), len(wcells))):
-            if what == "waves" and not waves:
+            if (what == "waves" and not waves) or (what == "wind" and not wind):
                 continue
             while True:
                 try:

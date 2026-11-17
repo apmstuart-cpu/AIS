@@ -692,7 +692,7 @@ def cmd_climate_fetch(cfg, a):
     _, dest = parse_destination(a.to)
     y0, y1 = (int(x) for x in a.years.split("-"))
     climate.fetch_only(conn, start, dest, _dt.fromisoformat(a.depart).astimezone(_tz.utc), list(range(y0, y1 + 1)),
-                       res=a.res, waves=not a.no_waves, per_day=a.max_calls_per_day,
+                       res=a.res, waves=not a.no_waves, wind=not a.waves_only, per_day=a.max_calls_per_day,
                        progress=lambda m: print(m, flush=True))
     conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     print(f"saved to {a.db}: copy it to the server and run `yachtspeed climate-merge <file>` there")
@@ -948,6 +948,7 @@ def build_parser():
     s.add_argument("--res", type=float, default=2.5)
     s.add_argument("--db", default="climate.db", help="output file")
     s.add_argument("--no-waves", action="store_true")
+    s.add_argument("--waves-only", action="store_true", help="only the ERA5 waves (wind already on the server)")
     s.add_argument("--max-calls-per-day", type=int, default=3000)
     s.set_defaults(fn=cmd_climate_fetch)
     s = sub.add_parser("climate-merge", help="add a climate-fetch file's history to this server's store")
