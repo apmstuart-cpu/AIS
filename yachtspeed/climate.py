@@ -771,7 +771,7 @@ def run_forecast(conn, cfg, y, start, dest, depart, bbox, res, land, years, allo
 
 
 DEFAULT_STRATEGIES = {
-    "A": {"label": "fastest (router's choice)"},
+    "A": {"label": "fastest"},
     "B": {"label": "classic: south-west to 22N 30W first", "via": (22.0, -30.0)},
     "C": {"label": "fuel-saving: at most 30 h motoring in the first 72 h", "motor_early": (72.0, 30.0)},
     "D": {"label": "more sailing: motor only below 7 kn of wind", "motor_below": 7.0},
@@ -981,7 +981,7 @@ def strategies_markdown(out) -> str:
     if "A" in keys and len(keys) > 1:
         byyear = {k: {r["year"]: r for r in out["strategies"][k]["history"] if r.get("status") == "ok"} for k in keys}
         others = [k for k in keys if k != "A"]
-        lines += ["", "Year by year in past weather (days; + = slower than A, the router's fastest):", "",
+        lines += ["", "Year by year in past weather (days; + = slower than A, the fastest):", "",
                   "| Year | A days | " + " | ".join(f"{k} days | {k} vs A" for k in others) + " |",
                   "|---|---|" + "---|---|" * len(others)]
         for yr in sorted(byyear["A"]):

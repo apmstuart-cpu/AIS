@@ -83,6 +83,8 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
     st = _load(folder, f"climate_{strategies}.json")
     if not c85 or not st:
         raise SystemExit("need climate_<name>.json and climate_<strategies>.json")
+    for v in st["strategies"].values():  # older results carried a longer label
+        v["label"] = v["label"].replace(" (router's choice)", "")
 
     ss = getSampleStyleSheet()
     H1 = ParagraphStyle("h1", parent=ss["Heading1"], fontSize=17, spaceAfter=6)
@@ -92,8 +94,11 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
     W = A4[0] - 30 * mm
 
     def table(rows, widths=None, head=1, size=8.2):
-        t = Table([[Paragraph(str(c), ParagraphStyle("c", parent=S, fontSize=size, leading=size + 2)) for c in r]
-                   for r in rows], colWidths=widths, repeatRows=head)
+        body = ParagraphStyle("c", parent=S, fontSize=size, leading=size + 2)
+        hdr = ParagraphStyle("ch", parent=body, textColor=colors.white, fontName="Helvetica-Bold",
+                             fontSize=size - 0.4, leading=size + 1.6)
+        t = Table([[Paragraph(str(c), hdr if i < head else body) for c in r] for i, r in enumerate(rows)],
+                  colWidths=widths, repeatRows=head)
         t.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, head - 1), colors.HexColor("#1f2a3a")),
                                ("TEXTCOLOR", (0, 0), (-1, head - 1), colors.white),
                                ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#b8c0cc")),
@@ -137,7 +142,7 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
                         f"(ONI {now.get('oni')}). Median passage {fc.get('days_median')} days with the forecast, "
                         f"{hs['days_median']} days in past weather alone; slowest {hs['days_max']} days.", P),
               Spacer(1, 3 * mm)]
-    rows = [["Option", "Median days", "10-90 % days", "Slowest", "On time", "Sailing", "Motoring", "Fuel",
+    rows = [["Option", "Median (d)", "10-90 % (d)", "Slowest", "On time", "Sailing", "Motor", "Fuel",
              "Typical arrival"]]
     typicals = {}
     from .climate import typical_run
@@ -148,9 +153,11 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
         typicals[k] = t
         rows.append([f"<b>{k}</b>: {v['label']}", sm.get("days_median"), f"{sm.get('days_p10')}-{sm.get('days_p90')}",
                      sm.get("days_max"), f"{sm.get('on_time')}/{sm.get('years')}", f"{sm.get('sailing_pct_median')}%",
-                     f"{sm.get('motor_hours_median')} h", f"{sm.get('fuel_l_median')} L", when(t["eta"]) if t else "-"])
+                     f"{sm.get('motor_hours_median'):.0f} h", f"{sm.get('fuel_l_median')} L",
+                     parse_iso(t["eta"]).strftime("%a %d %b %H:%M") if t else "-"])
     story += [Paragraph("Routing options (live forecast, fading into past years)", H2),
-              table(rows, [W * x for x in (.27, .08, .1, .07, .07, .07, .08, .08, .18)]), Spacer(1, 3 * mm)]
+              table(rows, [W * x for x in (.23, .085, .125, .085, .075, .085, .07, .075, .175)]), Spacer(1, 1 * mm),
+              Paragraph("Times in UTC.", S), Spacer(1, 2 * mm)]
     a, c, dd = (st["strategies"].get(k, {}).get("summary", {}) for k in "ACD")
     if a and c and dd:
         story.append(Paragraph(
@@ -174,7 +181,7 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
     story += [Paragraph("How much the boat's pace matters (percentage of the Oyster 885 polar)", H2),
               Paragraph("ALIBI's logged history averages about 84% of polar overall and 79-82% broad reaching in the "
                         "trades, so 80-85% is the realistic band.", P), Spacer(1, 2 * mm),
-              table(rows), PageBreak()]
+              table(rows, [W * x for x in (.08, .12, .14, .13, .14, .15, .13, .11)]), PageBreak()]
 
     # ---- 3. how the model works
     w_ = st.get("model_weights") or {}
@@ -209,7 +216,8 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
         f"close its own Oct-Dec ONI was; the closest are " + ", ".join(f"{y} ({v.get('weight')})" for y, v in top) +
         f", about {hs.get('effective_years')} years' worth of evidence. "
         f"{hs.get('el_nino_like_on_time')} of the {hs.get('el_nino_like_years')} El Niño-like years were on time at 85 %.", P),
-        Spacer(1, 2 * mm), table(rows, size=7.6), PageBreak()]
+        Spacer(1, 2 * mm), table(rows, [W * x for x in (.08, .2, .09, .12, .12, .14, .12, .13)], size=7.6),
+        PageBreak()]
 
     # ---- 5. year by year by option
     keys = list(st["strategies"])
@@ -228,7 +236,7 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
                 row.append(f"{r['days']} ({round((r['days'] - ra['days']) * 24):+d} h)")
         rows.append(row)
     story += [Paragraph("Each option in each past year's own weather (no forecast)", H2),
-              Paragraph("Hours are relative to option A, the router's fastest.", S), Spacer(1, 2 * mm), table(rows),
+              Paragraph("Hours are relative to option A, the fastest.", S), Spacer(1, 2 * mm), table(rows),
               Spacer(1, 4 * mm)]
     sj = folder / f"climate_{strategies}.jpg"
     if sj.exists():
