@@ -25,8 +25,12 @@ WORLD_10M = Path("/var/lib/yachtspeed/land_10m.json")
 NE_10M_URL = "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_land.geojson"
 
 
+OFFSHORE_NM = 3.0  # routes keep at least this far off every coast...
+HARBOUR_ZONE_NM = 12.0  # ...except within this distance of the start and finish, where only land itself counts
+
+
 class LandMask:
-    def __init__(self, rings, bbox, res=0.02):
+    def __init__(self, rings, bbox, res=0.02, offshore_nm=0.0):
         self.lat0, self.lon0, self.lat1, self.lon1 = bbox
         self.res = res
         self.nrows = max(1, int(math.ceil((self.lat1 - self.lat0) / res)))
@@ -34,6 +38,33 @@ class LandMask:
         self.rows = [bytearray(self.ncols) for _ in range(self.nrows)]
         for ring in rings:
             self._fill(ring)
+        self.offshore_nm = offshore_nm
+        self.core = None
+        if offshore_nm > 0:
+            self.core = self.rows
+            self._grow(offshore_nm)
+
+    def _grow(self, nm):
+        """Widen the land by `nm` nautical miles in every direction, so a route stays that far off."""
+        import re
+
+        mid = math.radians((self.lat0 + self.lat1) / 2)
+        kr = max(1, int(math.ceil(nm / 60 / self.res)))
+        kc = max(1, int(math.ceil(nm / 60 / max(0.2, math.cos(mid)) / self.res)))
+        wide = []
+        for row in self.rows:  # sideways
+            out = bytearray(row)
+            for m in re.finditer(rb"\x01+", bytes(row)):
+                a, b = max(0, m.start() - kc), min(self.ncols, m.end() + kc)
+                out[a:b] = b"\x01" * (b - a)
+            wide.append(int.from_bytes(out, "big"))
+        rows = []
+        for r in range(self.nrows):  # up and down
+            acc = 0
+            for rr in range(max(0, r - kr), min(self.nrows, r + kr + 1)):
+                acc |= wide[rr]
+            rows.append(bytearray(acc.to_bytes(self.ncols, "big")))
+        self.rows = rows
 
     def _fill(self, ring):
         """Scanline polygon fill (even-odd) of one ring into the raster."""
@@ -57,12 +88,14 @@ class LandMask:
                 if c1 >= c0:
                     row[c0:c1 + 1] = b"\x01" * (c1 - c0 + 1)
 
-    def is_land(self, lat, lon) -> bool:
+    def is_land(self, lat, lon, core=False) -> bool:
+        """On land, or within the offshore margin of it (core=True: on land itself)."""
         r = int((lat - self.lat0) / self.res)
         c = int((lon - self.lon0) / self.res)
         if r < 0 or c < 0 or r >= self.nrows or c >= self.ncols:
             return False  # outside the mapped area: treated as sea
-        return bool(self.rows[r][c])
+        rows = self.core if core and self.core is not None else self.rows
+        return bool(rows[r][c])
 
     def segment_clear(self, lat1, lon1, lat2, lon2, step_deg=None, skip_near=None, skip_nm=0.0) -> bool:
         """True if no sampled point along the segment is on land. Points within `skip_nm`
@@ -76,8 +109,11 @@ class LandMask:
             la, lo = lat1 + (lat2 - lat1) * f, lon1 + (lon2 - lon1) * f
             if self.is_land(la, lo):
                 near = skip_near if isinstance(skip_near, list) else ([skip_near] if skip_near else [])
-                if any(haversine_nm(la, lo, *pt) <= skip_nm for pt in near):
+                dist = min((haversine_nm(la, lo, *pt) for pt in near), default=1e9)
+                if dist <= skip_nm:
                     continue  # marina/harbour on the coastline
+                if self.core is not None and dist <= HARBOUR_ZONE_NM and not self.is_land(la, lo, core=True):
+                    continue  # leaving or approaching harbour: inside the margin is fine, land is not
                 return False
         return True
 
@@ -107,7 +143,7 @@ def _intersects(item, bbox):
 
 
 @lru_cache(maxsize=8)
-def mask_for_bbox(bbox: tuple) -> LandMask:
+def mask_for_bbox(bbox: tuple, offshore_nm: float = OFFSHORE_NM) -> LandMask:
     """Land mask covering bbox = (lat0, lon0, lat1, lon1), at ~2 km (coarser for huge areas)."""
     lat0, lon0, lat1, lon1 = bbox
     span = max(lat1 - lat0, lon1 - lon0)
@@ -116,7 +152,7 @@ def mask_for_bbox(bbox: tuple) -> LandMask:
     rings = [it[0] for it in _load(world) if _intersects(it, bbox)]
     if world == str(WORLD_50M):
         rings += [it[0] for it in _load(str(EATL_10M)) if _intersects(it, bbox)]
-    return LandMask(rings, bbox, res)
+    return LandMask(rings, bbox, res, offshore_nm)
 
 
 def default_mask() -> LandMask:

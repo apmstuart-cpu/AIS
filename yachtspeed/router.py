@@ -265,7 +265,7 @@ def route(grid: WeatherGrid, land, start, t0: datetime, dest, table, factor=1.0,
     # and on an ocean crossing the pruning sectors are wide by the time they reach the far side, so
     # the finish zone grows with the passage (about one sector's width at the destination)
     finish_nm = max(15.0, 12.0 * step_h, 1.2 * d_total * math.radians(sector_deg))
-    harbour_skip = harbour_nm
+    harbour_skip = harbour_nm  # (near the start and finish the land mask drops its offshore margin itself)
     approach_motor_nm = 30.0  # with an engine, the final miles can be motored if they cannot be sailed
 
     def velocity(node, w, heading):

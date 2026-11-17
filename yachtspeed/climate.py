@@ -425,7 +425,8 @@ def _thin(track, every_h=6.0, land=None):
             if (land is not None and out and prev is not None and prev is not p and out[-1][0] != prev["time_utc"]
                     and not land.segment_clear(out[-1][1], out[-1][2], p["lat"], p["lon"],
                                                skip_near=[(track[0]["lat"], track[0]["lon"]),
-                                                          (track[-1]["lat"], track[-1]["lon"])], skip_nm=3)):
+                                                          (track[-1]["lat"], track[-1]["lon"])],
+                                               skip_nm=2.0)):
                 out.extend(_corner(track, out[-1], p, land))
             out.append(row(p))
             last = t
@@ -440,7 +441,9 @@ def _corner(track, a, b, land):
     keep, cur = [], a
     for i, p in enumerate(mid):
         nxt = mid[i + 1] if i + 1 < len(mid) else b
-        if not land.segment_clear(cur[1], cur[2], nxt["lat"], nxt["lon"]):
+        ends = [(track[0]["lat"], track[0]["lon"]), (track[-1]["lat"], track[-1]["lon"])]
+        if not land.segment_clear(cur[1], cur[2], nxt["lat"], nxt["lon"], skip_near=ends,
+                                  skip_nm=2.0):
             keep.append([p["time_utc"], p["lat"], p["lon"], bool(p.get("motor"))])
             cur = keep[-1]
     return keep

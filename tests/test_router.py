@@ -61,7 +61,8 @@ def test_route_goes_round_an_island():
 
 def test_real_land_mask_blocks_lanzarote_and_finds_a_way_to_rubicon():
     land = mask_for_bbox((27.0, -15.5, 34.0, -8.0))
-    assert land.is_land(29.03, -13.65) and not land.is_land(28.80, -13.72)
+    assert land.is_land(29.03, -13.65) and not land.is_land(28.80, -13.72, core=True)
+    assert land.is_land(28.80, -13.72)  # the Bocaina strait is within 3 nm of land: kept off it at sea
     g = ConstGrid(14, 30.0, T0)  # NE trade
     r = route(g, land, (32.29, -9.77), T0, (28.857, -13.817), "oyster885_std", 0.85, step_h=1.0)
     assert r["status"] == "ok"
@@ -174,3 +175,12 @@ def test_final_upwind_miles_are_motored_when_there_is_an_engine():
                   motor_wind_below_kn=10, motor_speed_kn=8)
     assert motor["status"] == "ok" and motor["hours"] < 6
     assert sail["status"] != "ok" or sail["hours"] > motor["hours"]
+
+
+def test_routes_keep_three_miles_off_the_coast():
+    from yachtspeed.geo import haversine_nm
+
+    land = mask_for_bbox((27.0, -19.0, 30.0, -13.0))
+    assert land.offshore_nm == 3.0
+    assert land.is_land(28.88, -17.92) and not land.is_land(28.88, -17.92, core=True)  # 2.4 nm off La Palma
+    assert not land.is_land(28.95, -17.92)  # 6.6 nm off: open water
