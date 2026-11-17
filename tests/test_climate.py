@@ -162,3 +162,26 @@ def test_forecast_only_uses_stored_history_without_downloading(tmp_path, monkeyp
                       forecast_only=True, out_path=str(tmp_path / "fo.json"))
     assert "om_era5" not in kinds and out["years"] == [2021]
     assert out["forecast"]["status"] == "complete" and len(out["forecast"]["results"]) == 1
+
+
+def test_fetch_elsewhere_then_merge(tmp_path, monkeypatch):
+    from yachtspeed.db import connect as dbc
+
+    def fake_fetch(self, provider, kind, lat, lon, start, end):
+        t0 = datetime.fromisoformat(start + "T00:00:00+00:00")
+        if provider == "om_era5_ocean":
+            return [{"time_utc": (t0 + timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M:00Z"), "wave_height_m": 2.0,
+                     "wave_dir_from_deg": 60.0, "wave_period_s": 8.0} for h in range(0, 48, 3)]
+        return [{"time_utc": (t0 + timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M:00Z"), "wind_speed_kn": 15.0,
+                 "wind_dir_from_deg": 60.0, "wind_gust_kn": None} for h in range(48)]
+
+    monkeypatch.setattr(weather.OpenMeteo, "fetch", fake_fetch)
+    _, s = parse_destination("rubicon")
+    _, d = parse_destination("english-harbour")
+    dep = datetime(2026, 11, 20, 10, tzinfo=timezone.utc)
+    mac = dbc(str(tmp_path / "mac.db"))
+    climate.fetch_only(mac, s, d, dep, [2017], res=5.0, progress=lambda m: None)
+    server = dbc(str(tmp_path / "server.db"))
+    added = climate.merge(server, str(tmp_path / "mac.db"))
+    assert added["climate_wind"] > 0 and added["climate_cells"] > 0 and added["climate_wave_cells"] > 0
+    assert climate.merge(server, str(tmp_path / "mac.db"))["climate_wind"] == 0  # idempotent

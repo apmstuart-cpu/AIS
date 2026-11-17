@@ -680,6 +680,30 @@ def cmd_climate_route(cfg, a):
     print(climate.markdown(out))
 
 
+def cmd_climate_fetch(cfg, a):
+    """Download passage history on another machine (its own API allowance), for climate-merge."""
+    from datetime import datetime as _dt, timezone as _tz
+
+    from . import climate
+    from .speedtable import parse_destination
+
+    conn = db.connect(a.db)
+    _, start = parse_destination(a.frm)
+    _, dest = parse_destination(a.to)
+    y0, y1 = (int(x) for x in a.years.split("-"))
+    climate.fetch_only(conn, start, dest, _dt.fromisoformat(a.depart).astimezone(_tz.utc), list(range(y0, y1 + 1)),
+                       res=a.res, waves=not a.no_waves, per_day=a.max_calls_per_day,
+                       progress=lambda m: print(m, flush=True))
+    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    print(f"saved to {a.db}: copy it to the server and run `yachtspeed climate-merge <file>` there")
+
+
+def cmd_climate_merge(cfg, a):
+    from . import climate
+
+    print(climate.merge(_conn(cfg), a.file))
+
+
 def cmd_screenshots(cfg, a):
     from . import screenshots
 
@@ -916,6 +940,19 @@ def build_parser():
     s.add_argument("--days", type=int, default=14, help="verify up to this many past days not yet done")
     s.add_argument("--show", action="store_true", help="only print scores and weights (no API calls)")
     s.set_defaults(fn=cmd_skill)
+    s = sub.add_parser("climate-fetch", help="download passage history into a file (run on another machine)")
+    s.add_argument("--from", dest="frm", required=True)
+    s.add_argument("--to", required=True)
+    s.add_argument("--depart", required=True)
+    s.add_argument("--years", default="2006-2025")
+    s.add_argument("--res", type=float, default=2.5)
+    s.add_argument("--db", default="climate.db", help="output file")
+    s.add_argument("--no-waves", action="store_true")
+    s.add_argument("--max-calls-per-day", type=int, default=3000)
+    s.set_defaults(fn=cmd_climate_fetch)
+    s = sub.add_parser("climate-merge", help="add a climate-fetch file's history to this server's store")
+    s.add_argument("file")
+    s.set_defaults(fn=cmd_climate_merge)
     s = sub.add_parser("climate-route", help="passage odds: route through the same dates in past years (ERA5)")
     s.add_argument("--yacht", required=True)
     s.add_argument("--from", dest="frm", required=True, help="named place or lat,lon")

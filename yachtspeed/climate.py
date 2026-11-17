@@ -415,6 +415,59 @@ def _thin(track, every_h=6.0):
     return out
 
 
+def fetch_only(conn, start, dest, depart: datetime, years, res=2.5, margin=4.0, max_days=28, waves=True,
+               per_day=3000, per_hour=1500, per_minute=150, progress=print):
+    """Download history (wind, and ERA5 waves) for `years` into `conn`, exactly as `run` would, so it
+    can be fetched from another machine (its own API allowance) and merged on the server."""
+    from .router import grid_bbox
+
+    conn.executescript(SQL)
+    bbox = grid_bbox(start, dest, res=res, margin=margin)
+    cells = cells_for(bbox, res)
+    wcells = cells_for(wave_bbox(bbox), WAVE_RES)
+    client = OpenMeteo(Budget(conn, per_minute, per_hour, per_day))
+    for yr in years:
+        d0 = depart.replace(year=yr)
+        t_end = d0 + timedelta(days=max_days)
+        s_date, e_date = d0.strftime("%Y-%m-%d"), (t_end + timedelta(days=1)).strftime("%Y-%m-%d")
+        for what, fn, n in (("wind", lambda: fetch_year(conn, client, yr, cells, s_date, e_date), len(cells)),
+                            ("waves", lambda: fetch_waves_year(conn, client, yr, wcells, s_date, e_date), len(wcells))):
+            if what == "waves" and not waves:
+                continue
+            while True:
+                try:
+                    fn()
+                    progress(f"{yr} {what}: done ({n} grid points)")
+                    break
+                except QuotaExceeded as e:
+                    pause = (e.resume_at - utcnow()).total_seconds()
+                    progress(f"{yr} {what}: API limit, waiting until {iso(e.resume_at)}")
+                    if pause > 26 * 3600:
+                        return
+                    time.sleep(max(5.0, pause + 5))
+
+
+MERGE_TABLES = ("climate_wind", "climate_cells", "climate_wave", "climate_wave_cells")
+
+
+def merge(conn, path) -> dict:
+    """Add another machine's downloaded history (a climate-fetch database) to this one."""
+    conn.executescript(SQL)
+    conn.execute("ATTACH DATABASE ? AS other", (path,))
+    out = {}
+    try:
+        for t in MERGE_TABLES:
+            have = conn.execute("SELECT name FROM other.sqlite_master WHERE type='table' AND name=?", (t,)).fetchone()
+            if not have:
+                continue
+            before = conn.execute(f"SELECT count(*) FROM main.{t}").fetchone()[0]
+            conn.execute(f"INSERT OR IGNORE INTO main.{t} SELECT * FROM other.{t}")
+            out[t] = conn.execute(f"SELECT count(*) FROM main.{t}").fetchone()[0] - before
+    finally:
+        conn.execute("DETACH DATABASE other")
+    return out
+
+
 def run(conn, cfg, y, start, dest, depart: datetime, deadline: datetime, years, res=2.5, margin=4.0,
         max_days=28, step_h=4.0, heading_step=5, motor_wind_below_kn=None, motor_speed_kn=7.0, motor_max_h=None,
         maneuver_min=3.0, per_day=2500, per_hour=1200, per_minute=120, wait=True, out_path=None,
