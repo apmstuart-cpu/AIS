@@ -248,3 +248,28 @@ def test_thin_keeps_the_corner_round_an_island():
     thin = climate._thin(tr, every_h=6.0, land=land)
     assert all(land.segment_clear(a[1], a[2], b[1], b[2]) for a, b in zip(thin, thin[1:]))
     assert len(thin) > 2 and len(climate._thin(tr, every_h=6.0)) == 2
+
+
+def test_patch_redoes_only_the_chosen_option_history(tmp_path, monkeypatch, cfg):
+    import json as _json
+
+    from yachtspeed.config import Yacht
+
+    out = tmp_path / "s.json"
+    keep = {"status": "ok", "year": 2020, "days": 13.0, "on_time": True, "margin_h": 90.0, "sailed_nm": 2800.0,
+            "motor_hours": 30.0, "sailing_pct": 90, "track": []}
+    out.write_text(_json.dumps({"name": "strategies", "yacht": "X", "from": [28.857, -13.817], "to": [17.005, -61.765],
+                                "depart": "2026-11-20T10:00:00Z", "deadline": "2026-12-07T03:59:00Z",
+                                "issued_utc": "2026-11-17T22:25:00Z", "strategies": {
+                                    "A": {"label": "fastest", "results": [keep], "history": [keep]},
+                                    "D": {"label": "more sailing", "results": [keep], "history": [dict(keep, days=28.3)]}}}))
+    monkeypatch.setattr(climate, "oni_table", lambda conn=None: {})
+    conn = connect(":memory:")
+    y = Yacht(name="X", mmsi="1", speed_table="oyster885_std", polar_factor=0.85)
+    dep = datetime(2026, 11, 20, 10, tzinfo=timezone.utc)
+    r = climate.run_strategies(conn, cfg, y, (28.857, -13.817), (17.005, -61.765), dep,
+                               datetime(2026, 12, 7, 3, 59, tzinfo=timezone.utc), [2020],
+                               strategies={"D": climate.DEFAULT_STRATEGIES["D"]}, out_path=str(out), patch=True)
+    assert r["strategies"]["A"]["history"] == [keep] and r["strategies"]["D"]["results"] == [keep]
+    assert r["strategies"]["D"]["history"] == []  # no stored 2020 weather here: redone (empty), not the old 28.3
+    assert r["issued_utc"] == "2026-11-17T22:25:00Z" and r["status"] == "complete"

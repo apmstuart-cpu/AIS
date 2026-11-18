@@ -783,7 +783,7 @@ DEFAULT_STRATEGIES = {
 def run_strategies(conn, cfg, y, start, dest, depart, deadline, years, res=2.5, margin=4.0, max_days=28, step_h=4.0,
                    heading_step=5, maneuver_min=3.0, motor_wind_below_kn=None, motor_speed_kn=7.0, motor_max_h=None,
                    models=("ecmwf", "aifs", "gfs", "icon"), fade=(2.0, 15.0), strategies=None, burn_lph=None,
-                   waves=True, out_path=None, enso_sigma=1.0) -> dict:
+                   waves=True, out_path=None, enso_sigma=1.0, patch=False) -> dict:
     """Compare routing strategies through the live forecast (skill-weighted blend, handing over to each past
     year's weather), using the history already stored. A waypoint strategy routes start -> waypoint -> destination,
     carrying the remaining fuel into the second leg."""
@@ -806,6 +806,16 @@ def run_strategies(conn, cfg, y, start, dest, depart, deadline, years, res=2.5, 
                               "motor_below": v.get("motor_below"), "motor_max_h": v.get("motor_max_h"),
                               "results": [], "history": []} for k, v in strategies.items()},
            "status": "running"}
+    if patch and out_path and Path(out_path).exists():
+        # redo only these strategies' past-weather routes, keeping everything else in the published result
+        old = json.loads(Path(out_path).read_text())
+        for k in strategies:
+            if k in old["strategies"]:
+                old["strategies"][k]["history"] = []
+        old["patched_utc"], old["status"] = iso(now), "running"
+        for f in ("settings", "allowed_days"):
+            old.setdefault(f, out[f])
+        out = old
     try:
         cur, wts = enso_weights(oni_table(conn), years, sigma=enso_sigma)
         weights = {k: v[1] for k, v in wts.items()}
@@ -830,6 +840,30 @@ def run_strategies(conn, cfg, y, start, dest, depart, deadline, years, res=2.5, 
                 strategies_jpeg(base + ".jpg", out)
             except Exception as e:
                 log(logger, logging.WARNING, "strategies_chart_failed", error=str(e)[:120])
+
+    if patch:
+        cfield = CurrentField(conn, wave_bbox(bbox, 5.0), 5.0, depart.strftime("%m-%d"))
+        stored = {r[0]: r[1] for r in conn.execute("SELECT year, count(*) FROM climate_cells GROUP BY year")}
+        for yr in years:
+            if stored.get(yr, 0) < 0.9 * len(cells):
+                continue
+            d0 = depart.replace(year=yr)
+            clim = ClimateGrid(conn, yr, bbox, d0, d0 + timedelta(days=max_days), res).load()
+            s_date, e_date = d0.strftime("%Y-%m-%d"), (d0 + timedelta(days=max_days + 1)).strftime("%Y-%m-%d")
+            wfield = (WaveField(conn, yr, wave_bbox(bbox))
+                      if waves_complete(conn, yr, cells_for(wave_bbox(bbox), WAVE_RES), s_date, e_date) else None)
+            hgrid = sea(WithCurrent(clim, cfield), waves, (wfield, timedelta(0), None) if wfield is not None else None)
+            for key, st in strategies.items():
+                res_y = _strategy_year(hgrid, d0, st, yr, land, start, dest, y, allow_h, max_days, motor_max_h,
+                                       dict(step_h=step_h, heading_step=heading_step, maneuver_min=maneuver_min,
+                                            use_waves=waves, use_current=True, motor_wind_below_kn=motor_wind_below_kn,
+                                            motor_speed_kn=motor_speed_kn))
+                out["strategies"][key]["history"].append(res_y)
+                log(logger, logging.INFO, "strategy_year", strategy=key, basis="history", year=yr, days=res_y.get("days"))
+            save()
+        out["status"] = "complete"
+        save()
+        return out
 
     f_end = min(depart + timedelta(days=max_days), now + timedelta(days=15))
     client = OpenMeteo(Budget(conn, cfg.calls_per_minute, cfg.calls_per_hour, cfg.calls_per_day))
@@ -874,42 +908,48 @@ def run_strategies(conn, cfg, y, start, dest, depart, deadline, years, res=2.5, 
                   use_current=True, motor_wind_below_kn=motor_wind_below_kn, motor_speed_kn=motor_speed_kn)
         for key, st, (grid, t0, bucket) in [(k, v, b) for k, v in strategies.items()
                                              for b in ((fgrid, depart, "results"), (hgrid, d0, "history"))]:
-            kw["motor_wind_below_kn"] = st.get("motor_below", motor_wind_below_kn)
-            cap = motor_max_h if st.get("motor_max_h") is None else (
-                st["motor_max_h"] if motor_max_h is None else min(motor_max_h, st["motor_max_h"]))
-            if st.get("via"):
-                r1 = route(grid, land, start, t0, st["via"], y.speed_table or "cruiser27", y.polar_factor,
-                           max_hours=max_days * 24, motor_max_h=cap, **kw)
-                if r1.get("status") != "ok":
-                    r = r1
-                else:
-                    left = None if cap is None else max(0.0, cap - r1.get("motor_hours", 0.0))
-                    t1 = parse_iso(r1["eta_utc"])
-                    r2 = route(grid, land, tuple(st["via"]), t1, dest, y.speed_table or "cruiser27", y.polar_factor,
-                               max_hours=max_days * 24 - r1["hours"], motor_max_h=left, **kw)
-                    r = r2 if r2.get("status") != "ok" else {
-                        "status": "ok", "eta_utc": r2["eta_utc"], "hours": r1["hours"] + r2["hours"],
-                        "sailed_nm": round(r1["sailed_nm"] + r2["sailed_nm"], 1),
-                        "motor_hours": r1.get("motor_hours", 0.0) + r2.get("motor_hours", 0.0),
-                        "track": r1["track"] + r2["track"][1:]}
-            else:
-                r = route(grid, land, start, t0, dest, y.speed_table or "cruiser27", y.polar_factor,
-                          max_hours=max_days * 24, motor_max_h=cap, motor_early=st.get("motor_early"), **kw)
-            if r.get("status") != "ok":
-                res_y = {"year": yr, "status": "no_route", "on_time": False, "diagnostics": r.get("diagnostics")}
-            else:
-                hrs = r["hours"]
-                res_y = {"year": yr, "status": "ok", "eta": r["eta_utc"], "days": round(hrs / 24, 2),
-                         "on_time": hrs <= allow_h, "margin_h": round(allow_h - hrs, 1), "sailed_nm": r["sailed_nm"],
-                         "motor_hours": round(r.get("motor_hours", 0.0), 1),
-                         "sailing_pct": round(100 * (1 - r.get("motor_hours", 0.0) / hrs)) if hrs else None,
-                         "track": _thin(r["track"], land=land)}
+            res_y = _strategy_year(grid, t0, st, yr, land, start, dest, y, allow_h, max_days, motor_max_h, dict(kw))
             out["strategies"][key][bucket].append(res_y)
             log(logger, logging.INFO, "strategy_year", strategy=key, basis=bucket, year=yr, days=res_y.get("days"))
         save()
     out["status"] = "complete"
     save()
     return out
+
+
+def _strategy_year(grid, t0, st, yr, land, start, dest, y, allow_h, max_days, motor_max_h, kw):
+    """Route one strategy through one year's weather; the result row stored for it."""
+    kw["motor_wind_below_kn"] = st.get("motor_below", kw["motor_wind_below_kn"])
+    cap = motor_max_h if st.get("motor_max_h") is None else (
+        st["motor_max_h"] if motor_max_h is None else min(motor_max_h, st["motor_max_h"]))
+    if st.get("via"):
+        r1 = route(grid, land, start, t0, st["via"], y.speed_table or "cruiser27", y.polar_factor,
+                   max_hours=max_days * 24, motor_max_h=cap, **kw)
+        if r1.get("status") != "ok":
+            r = r1
+        else:
+            left = None if cap is None else max(0.0, cap - r1.get("motor_hours", 0.0))
+            t1 = parse_iso(r1["eta_utc"])
+            r2 = route(grid, land, tuple(st["via"]), t1, dest, y.speed_table or "cruiser27", y.polar_factor,
+                       max_hours=max_days * 24 - r1["hours"], motor_max_h=left, **kw)
+            r = r2 if r2.get("status") != "ok" else {
+                "status": "ok", "eta_utc": r2["eta_utc"], "hours": r1["hours"] + r2["hours"],
+                "sailed_nm": round(r1["sailed_nm"] + r2["sailed_nm"], 1),
+                "motor_hours": r1.get("motor_hours", 0.0) + r2.get("motor_hours", 0.0),
+                "track": r1["track"] + r2["track"][1:]}
+    else:
+        r = route(grid, land, start, t0, dest, y.speed_table or "cruiser27", y.polar_factor,
+                  max_hours=max_days * 24, motor_max_h=cap, motor_early=st.get("motor_early"), **kw)
+    if r.get("status") != "ok":
+        res_y = {"year": yr, "status": "no_route", "on_time": False, "diagnostics": r.get("diagnostics")}
+    else:
+        hrs = r["hours"]
+        res_y = {"year": yr, "status": "ok", "eta": r["eta_utc"], "days": round(hrs / 24, 2),
+                 "on_time": hrs <= allow_h, "margin_h": round(allow_h - hrs, 1), "sailed_nm": r["sailed_nm"],
+                 "motor_hours": round(r.get("motor_hours", 0.0), 1),
+                 "sailing_pct": round(100 * (1 - r.get("motor_hours", 0.0) / hrs)) if hrs else None,
+                 "track": _thin(r["track"], land=land)}
+    return res_y
 
 
 def typical_run(results, every_h=12.0):

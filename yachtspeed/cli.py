@@ -751,6 +751,8 @@ def cmd_strategies(cfg, a):
         usable = a.fuel_l * (1 - a.fuel_reserve) - a.genset_lph * 24 * (deadline - depart).total_seconds() / 86400
         motor_max_h = max(0.0, round(usable / a.burn_lph))
     strategies = dict(climate.DEFAULT_STRATEGIES)
+    if a.patch and not a.only:
+        sys.exit("--patch needs --only (which options to redo)")
     if a.only:
         strategies = {k: v for k, v in strategies.items() if k in a.only.split(",")}
     if a.debug:
@@ -764,7 +766,7 @@ def cmd_strategies(cfg, a):
     out = climate.run_strategies(conn, cfg, y, start, dest, depart, deadline, years,
                                  motor_wind_below_kn=a.motor_below, motor_speed_kn=a.motor_speed,
                                  motor_max_h=motor_max_h, strategies=strategies, burn_lph=a.burn_lph,
-                                 fade=(a.fade_from, a.fade_to),
+                                 fade=(a.fade_from, a.fade_to), patch=a.patch,
                                  out_path=str(_P(a.out_dir) / f"climate_{a.name}.json"))
     print(climate.strategies_markdown(out))
     if a.debug:
@@ -1154,6 +1156,8 @@ def build_parser():
     s.add_argument("--years", default="2006-2025")
     s.add_argument("--via", help="waypoint for the classic route, LAT,LON (default 22,-30)")
     s.add_argument("--only", help="run only these options, e.g. D or A,D")
+    s.add_argument("--patch", action="store_true",
+                   help="with --only: redo just those options' past-weather routes inside the existing result")
     s.add_argument("--debug", type=int, default=0, help="print the router's search for the first N steps")
     s.add_argument("--motor-below", type=float, default=None)
     s.add_argument("--motor-speed", type=float, default=8.0)
