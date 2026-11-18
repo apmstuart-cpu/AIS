@@ -18,6 +18,7 @@ from pathlib import Path
 
 from .geo import parse_iso
 
+STUCK_FACTOR = 1.5  # a past-year run sailing 1.5x the usual distance is a router failure
 STRONG_ONI = 1.5  # a strong El Nino: Oct-Dec ONI at or above this
 OPTION_COLOURS = {"A": (200, 30, 40), "B": (20, 90, 190), "C": (30, 140, 70), "D": (230, 120, 0), "E": (120, 40, 150), "F": (0, 150, 160)}
 
@@ -350,6 +351,14 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
     # ---- 5. year by year by option
     keys = list(st["strategies"])
     hist = {k: {r["year"]: r for r in st["strategies"][k].get("history", []) if r.get("status") == "ok"} for k in keys}
+    stuck = {}  # runs where the router wandered (far longer track than the others): a router failure, not a passage
+    for k in keys:
+        nm = sorted(r.get("sailed_nm") or 0 for r in hist[k].values())
+        med = nm[len(nm) // 2] if nm else 0
+        for y, r in list(hist[k].items()):
+            if med and (r.get("sailed_nm") or 0) > STUCK_FACTOR * med:
+                stuck.setdefault(k, []).append(y)
+                del hist[k][y]
     rows = [[T("Year", "Año")] + [T(f"{k} days", f"{k} días") if k == "A" else T(f"{k} (vs A)", f"{k} (vs A)")
                                   for k in keys]]
     for y in yrs:
@@ -358,7 +367,7 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
         for k in keys:
             r = hist[k].get(y)
             if not r:
-                row.append("-")
+                row.append(T("router failure*", "fallo del enrutador*") if y in stuck.get(k, []) else "-")
             elif k == "A" or not ra:
                 row.append(D(r["days"]))
             else:
@@ -388,7 +397,16 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
                           f"{STRONG_ONI} or more): {', '.join(map(str, strong))}.",
                           f"Las horas son respecto a la opción A, la más rápida. Años de El Niño fuerte (ONI oct-dic de "
                           f"{N(STRONG_ONI)} o más): {', '.join(map(str, strong))}."), S), Spacer(1, 2 * mm),
-              table(rows, [W * 0.16] + [W * 0.84 / len(keys)] * len(keys)), Spacer(1, 4 * mm)]
+              table(rows, [W * 0.16] + [W * 0.84 / len(keys)] * len(keys)), Spacer(1, 1 * mm)]
+    if stuck:
+        lst = "; ".join(f"{k} {', '.join(map(str, ys))}" for k, ys in stuck.items())
+        story.append(Paragraph(T(
+            f"* Router failure ({lst}): the routing program got stuck near the Canaries and wandered for days, so this "
+            "is a fault in the software, not a realistic passage. It is left out of the averages and will be fixed.",
+            f"* Fallo del enrutador ({lst}): el programa de enrutamiento se quedó atascado cerca de Canarias y estuvo "
+            "dando vueltas durante días; es un fallo del software, no una travesía realista. Se excluye de las medias y "
+            "se corregirá."), S))
+    story.append(Spacer(1, 3 * mm))
     sj = folder / f"climate_{strategies}.jpg"
     if sj.exists():
         story += [Paragraph(T("All options together", "Todas las opciones juntas"), H2), img(sj, maxh=120 * mm)]
@@ -401,7 +419,10 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
         p = tmp / f"option_{k}.jpg"
         best = option_map(st, k, p, lang=lang)
         sm = st["strategies"][k]["summary"]
-        hm = st["strategies"][k].get("history_summary") or {}
+        hm = dict(st["strategies"][k].get("history_summary") or {})
+        hd_ = sorted(r["days"] for r in hist[k].values())
+        if hd_ and stuck.get(k):  # recompute without the router failures
+            hm["days_median"], hm["days_max"] = hd_[len(hd_) // 2], hd_[-1]
         if es:
             story += [Paragraph(f"Opción {k}: {st['strategies'][k]['label']}", H2), Paragraph(
                 f"Con la previsión: mediana de {D(sm.get('days_median'))} días (10-90 %: "
