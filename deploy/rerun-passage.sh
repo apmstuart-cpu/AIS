@@ -16,7 +16,7 @@ C='--yacht ALIBI\ OF\ LONDON --from rubicon --to english-harbour --depart 2026-1
 eval \$Y climate-route \$C --name alibi_antigua
 eval \$Y climate-route \$C --polar-factor 0.95 --name alibi_antigua_80
 eval \$Y strategies \$C --name alibi_strategies
-eval \$Y forecast-maps --from rubicon --depart 2026-11-20T10:00+00:00 --days 10 --options A,B,C,D,E,F --name alibi_forecast
+eval \$Y forecast-maps --from rubicon --depart 2026-11-20T10:00+00:00 --days 10 --options A,B,C,D,E --name alibi_forecast
 eval \$Y wind-export --from rubicon --to english-harbour --depart 2026-11-20T10:00+00:00 --days 16
 systemctl start yachtspeed-report
 "

@@ -1267,7 +1267,7 @@ def build_parser():
     s.add_argument("--res", type=float, default=None, help="grid degrees (default 1 up to 4 days, else 2.5)")
     s.add_argument("--strategies", default="/var/lib/yachtspeed/report/climate_alibi_strategies.json")
     s.add_argument("--climate", default="/var/lib/yachtspeed/report/climate_alibi_antigua.json")
-    s.add_argument("--options", default="A,B,C,D,E,F", help="which options' routes to draw")
+    s.add_argument("--options", default="A,B,C,D,E", help="which options' routes to draw")
     s.add_argument("--name", default="alibi_forecast")
     s.add_argument("--out-dir", default="/var/lib/yachtspeed/report")
     s.set_defaults(fn=cmd_forecast_maps)
