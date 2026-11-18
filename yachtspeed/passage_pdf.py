@@ -169,6 +169,13 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
     def N(x):  # any number, with a decimal comma in Spanish
         return "-" if x is None else (str(x).replace(".", ",") if es else str(x))
 
+    def dm(v, pos, neg):  # 28°51'N
+        x = abs(v)
+        d, m = int(x), int(round((x - int(x)) * 60))
+        if m == 60:
+            d, m = d + 1, 0
+        return f"{d}°{m:02d}′{pos if v >= 0 else neg}"
+
     def PL(cj):  # how a run's boat speed was set, as a short label
         st_ = (cj or {}).get("settings") or {}
         f_ = st_.get("polar_factor") or 1.0
@@ -499,6 +506,53 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
         if best:
             story.append(img(p, maxh=98 * mm))
         story.append(PageBreak() if n % 2 == 1 or n == len(keys) - 1 else Spacer(1, 5 * mm))
+
+    # ---- course plan: what each option's typical route steers, a line per day
+    from .geo import haversine_nm as _hav
+
+    plans = []
+    for k in keys:
+        best = typicals.get(k)
+        tr = (best or {}).get("track") or []
+        if len(tr) < 3 or len(tr[1]) < 8:
+            continue  # older results carry positions only
+        t0_ = parse_iso(tr[0][0])
+        togo = [0.0] * len(tr)
+        for i in range(len(tr) - 2, -1, -1):
+            togo[i] = togo[i + 1] + _hav(tr[i][1], tr[i][2], tr[i + 1][1], tr[i + 1][2])
+        rows = [T(["Day", "Time (UTC)", "Position", "Course", "Speed", "Wind", "Wind angle", "", "To go"],
+                  ["Día", "Hora (UTC)", "Posición", "Rumbo", "Velocidad", "Viento", "Ángulo", "", "Faltan"])]
+        for i in range(len(tr) - 1):
+            ti = parse_iso(tr[i][0])
+            h = (ti - t0_).total_seconds() / 3600
+            if abs(h / 24 - round(h / 24)) > 0.01:
+                continue  # one line a day, at the departure hour
+            nx = tr[i + 1]  # the leg that starts here
+            mot = bool(nx[3])
+            rows.append([str(int(round(h / 24)) + 1), fmt_dt(ti, lang), f"{dm(tr[i][1], 'N', 'S')} {dm(tr[i][2], 'E', 'W')}",
+                         "-" if nx[4] is None else f"{nx[4]:03d}°", "-" if nx[5] is None else f"{N(nx[5])} kn",
+                         "-" if nx[6] is None else f"{N(nx[6])} kn", "-" if nx[7] is None else f"{nx[7]}°",
+                         T("motor", "motor") if mot else T("sail", "vela"), f"{togo[i]:,.0f} nm"])
+        plans.append((k, rows))
+    if plans:
+        story.append(Paragraph(T("Course plan: the typical route of each option",
+                                 "Plan de rumbos: la ruta típica de cada opción"), H2))
+        story.append(Paragraph(T("One line a day at the departure hour: the true course and speed the router chose for the next "
+                                 "4 hours, the wind and true wind angle on that leg, and the distance still to sail. The "
+                                 "router re-chooses every 4 hours as the wind changes; this is its plan through the model's "
+                                 "weather, a guide to the shape of the passage, not a substitute for the crew's own routing.",
+                                 "Una línea por día a la hora de salida: el rumbo verdadero y la velocidad que eligió el "
+                                 "enrutador para las 4 horas siguientes, el viento y el ángulo de viento verdadero en ese tramo, y "
+                                 "la distancia que queda. El enrutador vuelve a elegir cada 4 horas según cambia el viento; es su "
+                                 "plan con el tiempo del modelo, una guía de la forma de la travesía, no un sustituto del "
+                                 "enrutamiento de la tripulación."), S))
+        for n, (k, rows) in enumerate(plans):
+            story += [Spacer(1, 3 * mm), Paragraph(f"{T('Option', 'Opción')} {k}: {st['strategies'][k]['label']}",
+                                                   ParagraphStyle("ph", parent=P, fontName="Helvetica-Bold")),
+                      table(rows, [W * x for x in (.06, .17, .2, .08, .09, .09, .1, .08, .13)], size=7.6)]
+            if n % 2 == 1 and n < len(plans) - 1:
+                story.append(PageBreak())
+        story.append(PageBreak())
 
     # ---- appendices
     am = folder / f"climate_{maps}_assumptions.md"

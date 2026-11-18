@@ -412,12 +412,12 @@ class ClimateGrid(WeatherGrid):
             (self.year, lat, lon, iso(self.t0 - timedelta(hours=3)), iso(self.t_end + timedelta(hours=3)))).fetchall()
 
 
-def _thin(track, every_h=6.0, land=None):
+def _thin(track, every_h=4.0, land=None):
     """Keep a point every `every_h` hours. With a land mask, also keep any point the router passed
     through where the straight line between kept points would cut across land (round an island), so
     the drawn route goes where the boat went."""
     def row(p):
-        return [p["time_utc"], p["lat"], p["lon"], bool(p.get("motor"))]
+        return _row(p)
 
     out, last, prev = [], None, None
     for p in track:
@@ -435,6 +435,16 @@ def _thin(track, every_h=6.0, land=None):
     return out
 
 
+def _row(p):
+    """A stored route point: [time, lat, lon, motoring, course steered on the leg into this point (deg true),
+    speed over ground (kn), true wind speed (kn), true wind angle (deg)]."""
+    return [p["time_utc"], p["lat"], p["lon"], bool(p.get("motor")),
+            None if p.get("heading") is None else round(p["heading"]),
+            None if p.get("sog_kn") is None else round(p["sog_kn"], 1),
+            None if p.get("tws_kn") is None else round(p["tws_kn"], 1),
+            None if p.get("twa_deg") is None else round(p["twa_deg"])]
+
+
 def _corner(track, a, b, land):
     """The router's own points between kept point `a` and point `b`, thinned to the fewest that keep
     every straight piece off land."""
@@ -445,7 +455,7 @@ def _corner(track, a, b, land):
         ends = [(track[0]["lat"], track[0]["lon"]), (track[-1]["lat"], track[-1]["lon"])]
         if not land.segment_clear(cur[1], cur[2], nxt["lat"], nxt["lon"], skip_near=ends,
                                   skip_nm=2.0):
-            keep.append([p["time_utc"], p["lat"], p["lon"], bool(p.get("motor"))])
+            keep.append(_row(p))
             cur = keep[-1]
     return keep
 

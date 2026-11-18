@@ -519,7 +519,8 @@ def export_json(conn, cfg, client, start, dest, depart: datetime, out_path, days
             if tr:
                 routes[k] = {"label": v["label"], "eta": tr["eta"], "days": tr["days"],
                              "median": (v.get("summary") or {}).get("days_median"),
-                             "track": [[p[0], round(p[1], 3), round(p[2], 3), bool(p[3])] for p in tr["track"]]}
+                             "track": [[p[0], round(p[1], 3), round(p[2], 3), bool(p[3])] + list(p[4:8])
+                                       for p in tr["track"]]}
     out = {"issued_utc": iso(now), "depart": iso(depart), "start": list(start), "dest": list(dest),
            "dest_nm": round(haversine_nm(*start, *dest)), "bbox": bbox, "res": res, "lats": lats, "lons": lons,
            "step_h": step_h, "times": times, "forecast_pct": fcs, "models": used,
