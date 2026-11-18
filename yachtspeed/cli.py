@@ -668,6 +668,12 @@ def cmd_climate_route(cfg, a):
     y = next((y for y in cfg.fleet if y.mmsi == mmsi), None)
     if y is None or not y.speed_table:
         sys.exit("yacht not in config, or it has no speed_table (polar)")
+    if getattr(a, "measured_polar", None):  # steer by what she has actually logged, cell by cell
+        from . import speedtable as _st
+
+        _hist = json.loads(open(a.measured_polar).read())
+        y.speed_table = _st.register_measured(_hist, name="measured", base=y.speed_table)["name"]
+        y.polar_factor = 1.0
     if a.polar_factor is not None:
         y.polar_factor = a.polar_factor
     _, start = parse_destination(a.frm)
@@ -747,6 +753,12 @@ def cmd_strategies(cfg, a):
     y = next((y for y in cfg.fleet if y.mmsi == mmsi), None)
     if y is None or not y.speed_table:
         sys.exit("yacht not in config, or it has no speed_table (polar)")
+    if getattr(a, "measured_polar", None):  # steer by what she has actually logged, cell by cell
+        from . import speedtable as _st
+
+        _hist = json.loads(open(a.measured_polar).read())
+        y.speed_table = _st.register_measured(_hist, name="measured", base=y.speed_table)["name"]
+        y.polar_factor = 1.0
     if a.polar_factor is not None:
         y.polar_factor = a.polar_factor
     _, start = parse_destination(a.frm)
@@ -1175,6 +1187,8 @@ def build_parser():
     s.add_argument("--max-calls-per-day", type=int, default=3000)
     s.set_defaults(fn=cmd_climate_fetch)
     s = sub.add_parser("strategies", help="compare routing strategies (fastest / classic south / fuel-saving)")
+    s.add_argument("--measured-polar", default=None,
+                   help="a polar-history JSON (polar-history): route on the yacht's logged %% of polar by wind and angle")
     s.add_argument("--max-twa", type=float, default=None,
                    help="deepest true wind angle to sail, e.g. 150 = broad reach, no dead running (motoring exempt)")
     s.add_argument("--yacht", required=True)
@@ -1261,6 +1275,8 @@ def build_parser():
     s.add_argument("file")
     s.set_defaults(fn=cmd_climate_merge)
     s = sub.add_parser("climate-route", help="passage odds: route through the same dates in past years (ERA5)")
+    s.add_argument("--measured-polar", default=None,
+                   help="a polar-history JSON (polar-history): route on the yacht's logged %% of polar by wind and angle")
     s.add_argument("--max-twa", type=float, default=None,
                    help="deepest true wind angle to sail, e.g. 150 = broad reach, no dead running (motoring exempt)")
     s.add_argument("--yacht", required=True)

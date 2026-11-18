@@ -217,3 +217,19 @@ def test_max_twa_keeps_her_off_a_dead_run():
     assert free["status"] == capped["status"] == "ok"
     assert max(p["twa_deg"] for p in capped["track"][1:] if p.get("twa_deg") is not None) <= 150
     assert capped["maneuvers"] >= 1 and capped["hours"] < free["hours"] * 1.1  # gybing costs little
+
+
+def test_measured_polar_follows_the_logged_percentages():
+    from yachtspeed import speedtable as S
+
+    hist = {"overall": {"median_pct": 84, "hours": 2000},
+            "by_wind_and_angle": {"12-16 kn": {"110-150 deg": {"median_pct": 80, "hours": 477},
+                                               "40-70 deg": {"median_pct": 93, "hours": 37},
+                                               "150-180 deg": {"median_pct": 120, "hours": 300}}}}
+    fac = S.measured_factors(hist)
+    assert abs(fac[(14.0, 130.0)] - (477 * 0.80 + 50 * 0.84) / 527) < 0.002   # well sampled: close to its own 80%
+    assert 0.84 < fac[(14.0, 55.0)] < 0.93                                     # thin: pulled toward 84%
+    assert fac[(14.0, 165.0)] == 0.95                                          # above the polar: capped
+    S.register_measured(hist, name="t_measured")
+    base, meas = S.table_speed(14, 130, "oyster885_std"), S.table_speed(14, 130, "t_measured")
+    assert abs(meas / base - fac[(14.0, 130.0)]) < 0.01

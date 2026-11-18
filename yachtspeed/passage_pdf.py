@@ -169,6 +169,14 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
     def N(x):  # any number, with a decimal comma in Spanish
         return "-" if x is None else (str(x).replace(".", ",") if es else str(x))
 
+    def PL(cj):  # how a run's boat speed was set, as a short label
+        st_ = (cj or {}).get("settings") or {}
+        f_ = st_.get("polar_factor") or 1.0
+        if st_.get("table") == "measured":
+            return T("Measured", "Medida") if abs(f_ - 1) < 1e-6 else T(f"Measured −{round((1 - f_) * 100)}%",
+                                                                         f"Medida −{round((1 - f_) * 100)} %")
+        return f"{round(f_ * 100)} %"
+
     def DR(a, b):
         return f"{D(a)}-{D(b)}"
 
@@ -254,7 +262,7 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
                "Smallest margin", "On time"],
               ["Polar", "Mediana con previsión", "Previsión 10-90 %", "Mediana años anteriores", "Años anteriores 10-90 %",
                "Año más lento", "Margen mínimo", "A tiempo"])]
-    for lab, cj in (("85 %", c85), ("80 %", c80)):
+    for lab, cj in ((PL(c85), c85), (PL(c80), c80)):
         if not cj:
             continue
         f_ = (cj.get("forecast") or {}).get("summary") or {}
@@ -265,12 +273,47 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
                      f"{slow['margin_h']:.0f} h", f"{h_['on_time']}/{h_['years']}"])
     story += [Paragraph(T("How much the boat's pace matters (percentage of the Oyster 885 polar)",
                           "Cuánto importa el ritmo del barco (porcentaje de la polar del Oyster 885)"), H2),
-              Paragraph(T("ALIBI's logged history averages about 84% of polar overall and 79-82% broad reaching in the "
-                          "trades. With the G2 asymmetric spinnaker now aboard, 80-85% is the realistic band.",
-                          "El historial registrado de ALIBI promedia alrededor del 84 % de la polar en general y un 79-82 % "
-                          "a un largo en los alisios. Con el spinnaker asimétrico G2 ahora a bordo, el rango realista es "
-                          "del 80-85 %."), P), Spacer(1, 2 * mm),
-              table(rows, [W * x for x in (.08, .12, .14, .13, .14, .15, .13, .11)]), PageBreak()]
+              Paragraph(T("<b>Measured</b> means ALIBI's own logged speed at each wind strength and angle (table below), "
+                          "so the router favours the points of sail she is really fastest on; <b>Measured −5%</b> is the "
+                          "cautious case. Otherwise the figure is a flat percentage of the Oyster 885 polar.",
+                          "<b>Medida</b> es la velocidad registrada de ALIBI para cada fuerza y ángulo del viento (tabla "
+                          "siguiente), de modo que el enrutador prefiere los rumbos en los que realmente es más rápida; "
+                          "<b>Medida −5 %</b> es el caso prudente. Si no, la cifra es un porcentaje fijo de la polar del "
+                          "Oyster 885."), P), Spacer(1, 2 * mm),
+              table(rows, [W * x for x in (.1, .12, .14, .13, .14, .15, .11, .11)]), Spacer(1, 4 * mm)]
+    hist_p = next(iter(sorted(folder.glob("climate_*_polar_history.json"))), None)
+    if hist_p:
+        ph = json.loads(hist_p.read_text())
+        angs = ["40-70 deg", "70-110 deg", "110-150 deg", "150-180 deg"]
+        rows = [[T("Wind", "Viento")] + [T(a.replace(" deg", "°") + (" close reach" if a.startswith("40") else " beam reach"
+                                                                     if a.startswith("70") else " broad reach" if a.startswith("110")
+                                                                     else " running"),
+                                           a.replace(" deg", "°") + (" ceñida abierta" if a.startswith("40") else " través"
+                                                                     if a.startswith("70") else " largo" if a.startswith("110")
+                                                                     else " popa")) for a in angs]]
+        for wk, row in ph.get("by_wind_and_angle", {}).items():
+            cells = []
+            for a in angs:
+                c = row.get(a)
+                cells.append("-" if not c or c["hours"] < 1 else
+                             f"<b>{c['median_pct']}%</b> ({c['p25_pct']}-{c['p75_pct']}) · {c['hours']:.0f} h")
+            rows.append([wk.replace("20-40", "20+")] + cells)
+        ov = ph.get("overall", {})
+        story += [Paragraph(T("ALIBI's measured performance by point of sail",
+                              "Rendimiento medido de ALIBI según el rumbo"), H2),
+                  Paragraph(T(f"Median % of the Oyster 885 polar over {ov.get('hours', 0):,.0f} hours of clear sailing "
+                              f"(overall {ov.get('median_pct')}%), from her chartplotter track matched to hourly ERA5 wind, "
+                              "waves and current; middle half in brackets. She is strongest reaching and weakest broad "
+                              "reaching in the trade winds. Thin cells are pulled toward her overall figure, and anything above "
+                              "95% (likely motor-sailing in light air) is capped, before the router uses them.",
+                              f"Mediana del % de la polar del Oyster 885 en {ov.get('hours', 0):,.0f} horas de navegación "
+                              f"(global {ov.get('median_pct')} %), a partir de su track del plotter cruzado con viento, olas y "
+                              "corriente horarios de ERA5; entre paréntesis, la mitad central. Es más fuerte al través y más "
+                              "débil a un largo en los alisios. Las celdas con pocos datos se acercan a su cifra global y todo "
+                              "lo que supera el 95 % (probablemente motor y vela con poco viento) se limita, antes de que el "
+                              "enrutador las use."), S), Spacer(1, 2 * mm),
+                  table(rows, [W * x for x in (.1, .225, .225, .225, .225)], size=7.8)]
+    story.append(PageBreak())
 
     # ---- 3. how the model works
     w_ = st.get("model_weights") or {}
@@ -295,7 +338,8 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
             "previsión); la mar de popa añade hasta un 3 % por el surfeo, y la mar de proa y de través la frena. Corriente "
             "superficial media de 2022-2025 para estas fechas."
             "<br/><b>La prudencia va al final.</b> Cada simulación es la mejor estimación; la prudencia está en la elección "
-            "de la polar (85 % u 80 %) y en la lectura de los años más lentos, no acumulada dentro del modelo.", P))
+            f"de la velocidad del barco ({PL(c85)} o {PL(c80)}) y en la lectura de los años más lentos, no acumulada dentro "
+            "del modelo.", P))
     else:
         story.append(Paragraph(
         "<b>Router.</b> An isochrone router steers ALIBI across the Atlantic on a weather grid, choosing headings "
@@ -311,13 +355,13 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
         f"passage, with each past year's ERA5 weather taking over, giving {len(yrs)} possible passages. "
         "<br/><b>Sea and current.</b> ERA5 ocean waves for past years (wind-derived seas in the forecast); following "
         "seas add up to 3% for surfing, head and beam seas slow her. Mean surface current 2022-2025 for these dates."
-        "<br/><b>Caution comes last.</b> Every run is a best estimate; the caution is in the choice of polar (85% or 80%) "
-        "and in reading the slowest years, not stacked inside the model.", P))
+        f"<br/><b>Caution comes last.</b> Every run is a best estimate; the caution is in the choice of boat speed "
+        f"({PL(c85)} or {PL(c80)}) and in reading the slowest years, not stacked inside the model.", P))
 
     # ---- 4. El Nino
-    rows = [T(["Year", "ENSO (Oct-Dec ONI)", "Weight", "Days at 85 %", "Days at 80 %", "Margin at 85 %",
+    rows = [T(["Year", "ENSO (Oct-Dec ONI)", "Weight", f"Days, {PL(c85)}", f"Days, {PL(c80)}", f"Margin, {PL(c85)}",
                "Motor h", "Furthest south"],
-              ["Año", "ENSO (ONI oct-dic)", "Peso", "Días al 85 %", "Días al 80 %", "Margen al 85 %",
+              ["Año", "ENSO (ONI oct-dic)", "Peso", f"Días, {PL(c85)}", f"Días, {PL(c80)}", f"Margen, {PL(c85)}",
                "Horas motor", "Latitud más al sur"])]
     by = {lab: {r["year"]: r for r in (cj or {}).get("results", [])} for lab, cj in (("85", c85), ("80", c80))}
     for y in yrs:
@@ -352,13 +396,13 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
             f"El ONI de este otoño es {N(now.get('oni'))} ({now.get('season')}), un El Niño fuerte. Cada año anterior se "
             f"pondera según lo parecido que fue su propio ONI de oct-dic; los más parecidos son {tops}, lo que equivale a "
             f"unos {N(hs.get('effective_years'))} años de evidencia. {hs.get('el_nino_like_on_time')} de los "
-            f"{hs.get('el_nino_like_years')} años de tipo El Niño llegaron a tiempo al 85 %.", P))
+            f"{hs.get('el_nino_like_years')} años de tipo El Niño llegaron a tiempo ({PL(c85).lower()}).", P))
     else:
         story.append(Paragraph(
         f"This autumn's ONI is {now.get('oni')} ({now.get('season')}), a strong El Niño. Each past year is weighted by how "
         f"close its own Oct-Dec ONI was; the closest are " + ", ".join(f"{y} ({v.get('weight')})" for y, v in top) +
         f", about {hs.get('effective_years')} years' worth of evidence. "
-        f"{hs.get('el_nino_like_on_time')} of the {hs.get('el_nino_like_years')} El Niño-like years were on time at 85 %.", P))
+        f"{hs.get('el_nino_like_on_time')} of the {hs.get('el_nino_like_years')} El Niño-like years were on time ({PL(c85).lower()}).", P))
     story += [Spacer(1, 2 * mm), table(rows, [W * x for x in (.08, .2, .09, .12, .12, .14, .12, .13)], size=7.6),
         PageBreak()]
 

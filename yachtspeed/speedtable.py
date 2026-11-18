@@ -323,3 +323,59 @@ def destination_route(name: str, start_lat: float, start_lon: float) -> list[tup
         pts.extend(d["via"])
     pts.append(d["point"])
     return pts
+
+
+# --- a yacht's own measured polar ----------------------------------------------------------------
+TWS_CENTRES = {"8-12 kn": 10.0, "12-16 kn": 14.0, "16-20 kn": 18.0, "20-40 kn": 24.0}
+TWA_CENTRES = {"40-70 deg": 55.0, "70-110 deg": 90.0, "110-150 deg": 130.0, "150-180 deg": 165.0}
+
+
+def measured_factors(history: dict, prior_hours=50.0, cap=0.95, floor=0.6):
+    """{(tws, twa): fraction of the polar} from a polar-history analysis (history.analyse): each cell's median,
+    pulled toward the yacht's overall median in proportion to how thin the cell is (`prior_hours` of evidence
+    counts as much as the overall figure), and capped (a cell above the polar is more likely motor-sailing or a
+    wind-model error than real speed)."""
+    overall = history["overall"]["median_pct"] / 100
+    out = {}
+    for wk, row in history.get("by_wind_and_angle", {}).items():
+        for ak, c in row.items():
+            if wk in TWS_CENTRES and ak in TWA_CENTRES:
+                h = c.get("hours", 0.0)
+                f = (h * c["median_pct"] / 100 + prior_hours * overall) / (h + prior_hours)
+                out[(TWS_CENTRES[wk], TWA_CENTRES[ak])] = round(max(floor, min(cap, f)), 3)
+    for w in TWS_CENTRES.values():  # fill any empty cell with the overall figure
+        for a in TWA_CENTRES.values():
+            out.setdefault((w, a), round(min(cap, overall), 3))
+    return out
+
+
+def _bilinear(fac, tws, twa):
+    ws, as_ = sorted({w for w, _ in fac}), sorted({a for _, a in fac})
+    w = max(ws[0], min(ws[-1], tws))
+    a = max(as_[0], min(as_[-1], twa))
+
+    def bracket(x, xs):
+        for lo, hi in zip(xs, xs[1:]):
+            if lo <= x <= hi:
+                return lo, hi, (x - lo) / (hi - lo) if hi > lo else 0.0
+        return xs[-1], xs[-1], 0.0
+
+    w0, w1, tw = bracket(w, ws)
+    a0, a1, ta = bracket(a, as_)
+    return ((fac[(w0, a0)] * (1 - ta) + fac[(w0, a1)] * ta) * (1 - tw)
+            + (fac[(w1, a0)] * (1 - ta) + fac[(w1, a1)] * ta) * tw)
+
+
+def register_measured(history: dict, name="measured", base="oyster885_std", **kw) -> dict:
+    """Add TABLES[name]: the base polar scaled cell by cell to what the yacht has actually logged, so the
+    router prefers the points of sail she is really fastest on. Use it with polar factor 1.0."""
+    fac = measured_factors(history, **kw)
+    b = TABLES[base]
+    out = {k: v for k, v in b.items() if k not in ("speeds", "beat_vmg", "run_vmg", "source")}
+    out["speeds"] = {a: [round(v * _bilinear(fac, w, a), 3) for v, w in zip(vals, b["tws"])] for a, vals in b["speeds"].items()}
+    out["beat_vmg"] = [round(v * _bilinear(fac, w, 45), 3) for v, w in zip(b["beat_vmg"], b["tws"])]
+    out["run_vmg"] = [round(v * _bilinear(fac, w, 180), 3) for v, w in zip(b["run_vmg"], b["tws"])]
+    out["source"] = (f"{base} scaled to the yacht's logged performance by wind and angle "
+                     f"({history['overall']['hours']} h; overall {history['overall']['median_pct']}%)")
+    TABLES[name] = out
+    return {"name": name, "factors": {f"{w:g} kn/{a:g} deg": f for (w, a), f in sorted(fac.items())}}
