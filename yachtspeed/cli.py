@@ -751,6 +751,12 @@ def cmd_strategies(cfg, a):
         usable = a.fuel_l * (1 - a.fuel_reserve) - a.genset_lph * 24 * (deadline - depart).total_seconds() / 86400
         motor_max_h = max(0.0, round(usable / a.burn_lph))
     strategies = dict(climate.DEFAULT_STRATEGIES)
+    if a.only:
+        strategies = {k: v for k, v in strategies.items() if k in a.only.split(",")}
+    if a.debug:
+        from . import router as _router
+
+        _router.DEBUG = []
     if a.via:
         la, lo = (float(x) for x in a.via.split(","))
         strategies["B"] = {"label": f"classic: south-west to {la:g}N {abs(lo):g}W first", "via": (la, lo)}
@@ -761,6 +767,19 @@ def cmd_strategies(cfg, a):
                                  fade=(a.fade_from, a.fade_to),
                                  out_path=str(_P(a.out_dir) / f"climate_{a.name}.json"))
     print(climate.strategies_markdown(out))
+    if a.debug:
+        from . import router as _router
+
+        for row in _router.DEBUG:
+            if "route" in row or row["step"] < a.debug or row["step"] % 6 == 0:
+                print(json.dumps(row, separators=(",", ":")))
+        for yr in years:  # which stored wind cells are missing near the start
+            have = {(r[0], r[1]) for r in conn.execute(
+                "SELECT DISTINCT cell_lat, cell_lon FROM climate_wind WHERE year=? AND cell_lat BETWEEN 22 AND 35 "
+                "AND cell_lon BETWEEN -30 AND -7.5", (yr,))}
+            want = {(la / 2, lo / 2) for la in range(45, 71, 5) for lo in range(-60, -14, 5)}
+            print(yr, "stored wind cells near the Canaries:", len(have & want), "of", len(want),
+                  "missing:", sorted(want - have))
 
 
 def cmd_import_gpx(cfg, a):
@@ -1134,6 +1153,8 @@ def build_parser():
     s.add_argument("--by", required=True)
     s.add_argument("--years", default="2006-2025")
     s.add_argument("--via", help="waypoint for the classic route, LAT,LON (default 22,-30)")
+    s.add_argument("--only", help="run only these options, e.g. D or A,D")
+    s.add_argument("--debug", type=int, default=0, help="print the router's search for the first N steps")
     s.add_argument("--motor-below", type=float, default=None)
     s.add_argument("--motor-speed", type=float, default=8.0)
     s.add_argument("--motor-max-h", type=float, default=None)

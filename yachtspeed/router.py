@@ -248,6 +248,9 @@ def _move(lat, lon, ve_kn, vn_kn, hours):
     return lat + dlat, lon + dlon
 
 
+DEBUG = None  # set to a list to collect per-step search statistics (yachtspeed strategies --debug)
+
+
 def route(grid: WeatherGrid, land, start, t0: datetime, dest, table, factor=1.0, step_h=1.0,
           heading_step=5, sector_deg=2.0, maneuver_min=3.0, max_hours=240, use_waves=True,
           use_current=True, arrive_nm=1.0, harbour_nm=2.0, motor_wind_below_kn=None,
@@ -300,11 +303,17 @@ def route(grid: WeatherGrid, land, start, t0: datetime, dest, table, factor=1.0,
 
     closest = None  # (distance to destination, node): for diagnostics when no route is found
     _step = 0
+    if DEBUG is not None:
+        DEBUG.append({"route": f"{iso(t0)} {start} -> {dest} motor<{motor_wind_below_kn} cap {motor_max_h}"})
     for _step in range(steps):
         new = {}
+        dbg = {"step": _step, "frontier": len(frontier), "no_wind": 0, "no_vel": 0, "land": 0, "kids": 0} \
+            if DEBUG is not None else None
         for node in frontier:
             w = grid.sample(node.lat, node.lon, node.t)
             if w is None:
+                if dbg:
+                    dbg["no_wind"] += 1
                 continue
             # can we reach the destination directly within this step?
             d = haversine_nm(node.lat, node.lon, *dest)
@@ -334,6 +343,8 @@ def route(grid: WeatherGrid, land, start, t0: datetime, dest, table, factor=1.0,
             for k in range(0, 360, heading_step):
                 vel = velocity(node, w, k)
                 if not vel:
+                    if dbg:
+                        dbg["no_vel"] += 1
                     continue
                 ve, vn, side, twa, mot = vel
                 hours = step_h
@@ -343,7 +354,11 @@ def route(grid: WeatherGrid, land, start, t0: datetime, dest, table, factor=1.0,
                     man = 1
                 lat, lon = _move(node.lat, node.lon, ve, vn, hours)
                 if not land.segment_clear(node.lat, node.lon, lat, lon, skip_near=[dest, start], skip_nm=harbour_skip):
+                    if dbg:
+                        dbg["land"] += 1
                     continue
+                if dbg:
+                    dbg["kids"] += 1
                 ds = haversine_nm(s_lat, s_lon, lat, lon)
                 b = initial_bearing(s_lat, s_lon, lat, lon) if ds > 0.01 else brg_sd
                 off = ((b - brg_sd + 540) % 360) - 180
@@ -359,6 +374,15 @@ def route(grid: WeatherGrid, land, start, t0: datetime, dest, table, factor=1.0,
                                     {"score": score, "wind_from": round(w["wind_dir_from_deg"]), "motor": mot,
                                      "mh": node.extra.get("mh", 0.0) + (step_h if mot else 0.0),
                                      "wave_m": round(w["wave_height_m"], 1) if w.get("wave_height_m") is not None else None})
+        if dbg is not None:
+            if new:
+                far = min(new.values(), key=lambda n: haversine_nm(n.lat, n.lon, *dest))
+                dbg.update({"t": iso(node.t if frontier else t0)[5:13], "sectors": len(new),
+                            "lead_nm_to_go": round(haversine_nm(far.lat, far.lon, *dest)),
+                            "lead_pos": [round(far.lat, 2), round(far.lon, 2)],
+                            "lats": [round(min(n.lat for n in new.values()), 1), round(max(n.lat for n in new.values()), 1)],
+                            "lons": [round(min(n.lon for n in new.values()), 1), round(max(n.lon for n in new.values()), 1)]})
+            DEBUG.append(dbg)
         if best is not None and (not new or best[0] <= min(n.t for n in new.values())):
             break
         frontier = list(new.values())
