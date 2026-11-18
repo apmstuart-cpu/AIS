@@ -207,3 +207,13 @@ def test_island_across_the_finish_is_rounded_not_overshot():
     assert r["status"] == "ok"
     past = max((haversine_nm(p["lat"], p["lon"], *dest) for p in r["track"] if p["lon"] < dest[1] - 0.01), default=0)
     assert past < 60  # before the fix: 141 nm past the destination
+
+
+def test_max_twa_keeps_her_off_a_dead_run():
+    """Wind dead astern for the whole leg: with max_twa=150 she broad-reaches and gybes, never sailing deeper."""
+    g = ConstGrid(16, 90.0, T0)  # from the east, destination due west
+    free = route(g, NO_LAND, (20.0, -30.0), T0, (20.0, -34.0), "oyster885_std", 0.85, step_h=1.0)
+    capped = route(g, NO_LAND, (20.0, -30.0), T0, (20.0, -34.0), "oyster885_std", 0.85, step_h=1.0, max_twa=150)
+    assert free["status"] == capped["status"] == "ok"
+    assert max(p["twa_deg"] for p in capped["track"][1:] if p.get("twa_deg") is not None) <= 150
+    assert capped["maneuvers"] >= 1 and capped["hours"] < free["hours"] * 1.1  # gybing costs little

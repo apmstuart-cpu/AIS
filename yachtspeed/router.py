@@ -249,13 +249,17 @@ def _move(lat, lon, ve_kn, vn_kn, hours):
 
 
 DEBUG = None  # set to a list to collect per-step search statistics (yachtspeed strategies --debug)
+MAX_TWA = None  # default for route(max_twa=...): deepest true wind angle allowed under sail (None = any)
 
 
 def route(grid: WeatherGrid, land, start, t0: datetime, dest, table, factor=1.0, step_h=1.0,
           heading_step=5, sector_deg=2.0, maneuver_min=3.0, max_hours=240, use_waves=True,
           use_current=True, arrive_nm=1.0, harbour_nm=2.0, motor_wind_below_kn=None,
-          motor_speed_kn=7.0, motor_max_h=None, motor_early=None) -> dict:
-    """Isochrone routing. Returns dict with ETA, track and summary, or status 'no_route'."""
+          motor_speed_kn=7.0, motor_max_h=None, motor_early=None, max_twa=None) -> dict:
+    """Isochrone routing. Returns dict with ETA, track and summary, or status 'no_route'.
+    `max_twa`: never sail deeper than this true wind angle (e.g. 150 = broad reach, no dead running, no risk of a
+    crash gybe); headings deeper than that are only allowed under engine."""
+    max_twa = MAX_TWA if max_twa is None else max_twa
     s_lat, s_lon = start
     brg_sd = initial_bearing(s_lat, s_lon, *dest)
     d_total = haversine_nm(s_lat, s_lon, *dest)
@@ -295,6 +299,8 @@ def route(grid: WeatherGrid, land, start, t0: datetime, dest, table, factor=1.0,
             stw = max(stw, motor_speed_kn)
         elif stw <= 0.2:
             return None
+        elif max_twa is not None and twa > max_twa:
+            return None  # too deep to sail safely: broad reach and gybe instead
         if use_waves:
             stw *= wave_factor(w.get("wave_height_m"), w.get("wave_dir_from_deg"), heading,
                                w.get("wave_period_s"))[0]

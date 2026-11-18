@@ -653,6 +653,10 @@ def cmd_skill(cfg, a):
 
 def cmd_climate_route(cfg, a):
     """Passage odds from past weather (ERA5): route the yacht through the same dates in past years."""
+    if getattr(a, "max_twa", None):
+        from . import router as _router
+
+        _router.MAX_TWA = a.max_twa  # no sailing deeper than this (broad reach, no dead running)
     from datetime import datetime as _dt, timezone as _tz
     from pathlib import Path as _P
 
@@ -728,6 +732,10 @@ def cmd_climate_fetch(cfg, a):
 
 def cmd_strategies(cfg, a):
     """Compare routing strategies through the live forecast and past years (history must be stored)."""
+    if getattr(a, "max_twa", None):
+        from . import router as _router
+
+        _router.MAX_TWA = a.max_twa  # no sailing deeper than this (broad reach, no dead running)
     from datetime import datetime as _dt, timezone as _tz
     from pathlib import Path as _P
 
@@ -1167,6 +1175,8 @@ def build_parser():
     s.add_argument("--max-calls-per-day", type=int, default=3000)
     s.set_defaults(fn=cmd_climate_fetch)
     s = sub.add_parser("strategies", help="compare routing strategies (fastest / classic south / fuel-saving)")
+    s.add_argument("--max-twa", type=float, default=None,
+                   help="deepest true wind angle to sail, e.g. 150 = broad reach, no dead running (motoring exempt)")
     s.add_argument("--yacht", required=True)
     s.add_argument("--from", dest="frm", required=True)
     s.add_argument("--to", required=True)
@@ -1251,6 +1261,8 @@ def build_parser():
     s.add_argument("file")
     s.set_defaults(fn=cmd_climate_merge)
     s = sub.add_parser("climate-route", help="passage odds: route through the same dates in past years (ERA5)")
+    s.add_argument("--max-twa", type=float, default=None,
+                   help="deepest true wind angle to sail, e.g. 150 = broad reach, no dead running (motoring exempt)")
     s.add_argument("--yacht", required=True)
     s.add_argument("--from", dest="frm", required=True, help="named place or lat,lon")
     s.add_argument("--to", required=True, help="named place or lat,lon")

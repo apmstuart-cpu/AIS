@@ -283,6 +283,9 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
             "eligiendo el rumbo cada 4 horas según la polar, el viento, el estado de la mar y la corriente, con una "
             f"máscara de tierra que la mantiene al menos a 3 millas de la costa. Navega a motor a {mk} nudos cuando el "
             f"viento baja de {mw} nudos, dentro del límite de consumo de combustible (como máximo {mh_:.0f} h a motor). "
+            + (f"<b>Nunca navega a más de {s['max_twa_deg']:.0f}° del viento</b> (un largo: sin empopada, sin riesgo de "
+               "trasluchada involuntaria y más cerca del mejor ángulo de ALIBI); en su lugar, traslucha. "
+               if s.get("max_twa_deg") else "") +
             "<br/><b>Meteorología.</b> Se combinan cuatro modelos de previsión (ECMWF IFS, ECMWF AIFS, GFS, ICON), cada uno "
             "ponderado según su precisión medida a lo largo de la ruta en los últimos 30 días "
             f"({st.get('weights_checks')} comprobaciones; {wtxt}). Al principio se usa solo la previsión; después su peso "
@@ -299,6 +302,9 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
         "every 4 hours from the polar, the wind, the sea state and the current, with a land mask. It motors at "
         f"{s.get('motor_speed_kn')} kn when the wind is below {s.get('motor_wind_below_kn')} kn, within the fuel consumption limitation "
         f"(at most {s.get('motor_max_h'):.0f} h of motoring). "
+        + (f"<b>She never sails deeper than {s['max_twa_deg']:.0f}° off the wind</b> (a broad reach: no dead running, "
+           "so no risk of a crash gybe, and nearer ALIBI's best downwind angle); she gybes instead. "
+           if s.get("max_twa_deg") else "") +
         "<br/><b>Weather.</b> Four forecast models (ECMWF IFS, ECMWF AIFS, GFS, ICON) are blended, each weighted by "
         f"its measured accuracy along the route over the last 30 days ({st.get('weights_checks')} checks; {wtxt}). "
         f"The forecast is used alone at first; its weight then fades steadily to zero by day {hd[1]} of the "

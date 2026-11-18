@@ -24,6 +24,7 @@ from pathlib import Path
 
 from .geo import haversine_nm, iso, parse_iso, utcnow
 from .logutil import log
+from . import router as _router_mod
 from .router import WeatherGrid, route
 from .weather import Budget, FetchError, OpenMeteo, QuotaExceeded
 
@@ -526,6 +527,7 @@ def run(conn, cfg, y, start, dest, depart: datetime, deadline: datetime, years, 
            "deadline": iso(deadline), "allowed_days": round(allow_h / 24, 2), "years": list(years),
            "grid": {"bbox": bbox, "res_deg": res, "cells": len(cells), "step_h": step_h},
            "settings": {"table": y.speed_table, "polar_factor": y.polar_factor, "gybe_min": maneuver_min,
+                        "max_twa_deg": _router_mod.MAX_TWA,
                         "motor_wind_below_kn": motor_wind_below_kn, "motor_speed_kn": motor_speed_kn,
                         "motor_max_h": motor_max_h, "fuel": fuel_note,
                         "current": f"mean of {CURRENT_YEARS[0]}-{CURRENT_YEARS[-1]} for these dates" if currents
@@ -801,6 +803,7 @@ def run_strategies(conn, cfg, y, start, dest, depart, deadline, years, res=2.5, 
     out = {"name": "strategies", "yacht": y.name, "from": list(start), "to": list(dest), "depart": iso(depart),
            "deadline": iso(deadline), "allowed_days": round(allow_h / 24, 2), "issued_utc": iso(now),
            "settings": {"table": y.speed_table, "polar_factor": y.polar_factor, "motor_wind_below_kn": motor_wind_below_kn,
+                        "max_twa_deg": _router_mod.MAX_TWA,
                         "motor_speed_kn": motor_speed_kn, "motor_max_h": motor_max_h, "burn_lph": burn_lph},
            "strategies": {k: {"label": v["label"], "via": v.get("via"), "motor_early": v.get("motor_early"),
                               "motor_below": v.get("motor_below"), "motor_max_h": v.get("motor_max_h"),
