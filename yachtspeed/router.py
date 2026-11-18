@@ -255,11 +255,14 @@ MAX_TWA = None  # default for route(max_twa=...): deepest true wind angle allowe
 def route(grid: WeatherGrid, land, start, t0: datetime, dest, table, factor=1.0, step_h=1.0,
           heading_step=5, sector_deg=2.0, maneuver_min=3.0, max_hours=240, use_waves=True,
           use_current=True, arrive_nm=1.0, harbour_nm=2.0, motor_wind_below_kn=None,
-          motor_speed_kn=7.0, motor_max_h=None, motor_early=None, max_twa=None) -> dict:
+          motor_speed_kn=7.0, motor_max_h=None, motor_early=None, max_twa=None, light_penalty=None) -> dict:
     """Isochrone routing. Returns dict with ETA, track and summary, or status 'no_route'.
     `max_twa`: never sail deeper than this true wind angle (e.g. 150 = broad reach, no dead running, no risk of a
     crash gybe); headings deeper than that are only allowed under engine."""
     max_twa = MAX_TWA if max_twa is None else max_twa
+    # light_penalty = (kn, nm): each hour spent in wind under `kn` costs `nm` of progress when choosing between
+    # routes, so the search prefers one that stays in the breeze (more time in 10+ kn) at some cost in distance
+    light_kn, light_nm = light_penalty if light_penalty else (0.0, 0.0)
     s_lat, s_lon = start
     brg_sd = initial_bearing(s_lat, s_lon, *dest)
     d_total = haversine_nm(s_lat, s_lon, *dest)
@@ -379,13 +382,14 @@ def route(grid: WeatherGrid, land, start, t0: datetime, dest, table, factor=1.0,
                 key = int((off + 180) // sector_deg)
                 # prune: furthest from start per sector, tie-broken by closeness to destination
                 dd = haversine_nm(lat, lon, *dest)
-                score = ds - 0.3 * dd - 2.7 * min(dd, near_nm)  # penalty rises 3 nm per nm to go inside near_nm
+                lh = node.extra.get("lh", 0.0) + (step_h if w["wind_speed_kn"] < light_kn else 0.0)
+                score = ds - 0.3 * dd - 2.7 * min(dd, near_nm) - light_nm * lh  # (3 nm per nm to go near the end)
                 cur = new.get(key)
                 if cur is None or score > cur.extra["score"]:
                     new[key] = Node(lat, lon, node.t + timedelta(hours=step_h), node, k, side,
                                     math.hypot(ve, vn), w["wind_speed_kn"], twa, node.maneuvers + man, ds,
                                     {"score": score, "wind_from": round(w["wind_dir_from_deg"]), "motor": mot,
-                                     "mh": node.extra.get("mh", 0.0) + (step_h if mot else 0.0),
+                                     "mh": node.extra.get("mh", 0.0) + (step_h if mot else 0.0), "lh": lh,
                                      "wave_m": round(w["wave_height_m"], 1) if w.get("wave_height_m") is not None else None})
         if dbg is not None:
             if new:

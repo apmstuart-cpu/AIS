@@ -30,7 +30,7 @@ ES_LABELS = {
     "B": "clásica: rumbo suroeste hasta 22N 30W primero",
     "C": "ahorro de combustible: como máximo 30 h a motor en las primeras 72 h",
     "D": "más vela: motor solo con menos de 7 nudos de viento",
-    "E": "casi todo a vela: como máximo 48 h a motor en total",
+    "E": "más viento: el máximo tiempo con 10 nudos o más",
     "F": "vía Cabo Verde: doblar 17,5N 25,5W, al noroeste de Santo Antão",
 }
 ES_PHASE = {"El Nino": "El Niño", "La Nina": "La Niña", "neutral": "neutro"}
@@ -232,9 +232,9 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
                           f"{D(hs['days_median'])} días solo con el tiempo de años anteriores; la más lenta, "
                           f"{D(hs['days_max'])} días."), P),
               Spacer(1, 3 * mm)]
-    rows = [T(["Option", "Median (d)", "10-90 % (d)", "Slowest", "On time", "Sailing", "Motor", "Fuel",
+    rows = [T(["Option", "Median (d)", "10-90 % (d)", "Slowest", "On time", "Sailing", "10+ kn", "Motor", "Fuel",
                "Typical arrival"],
-              ["Opción", "Mediana (d)", "10-90 % (d)", "Más lenta", "A tiempo", "Vela", "Motor", "Gasoil",
+              ["Opción", "Mediana (d)", "10-90 % (d)", "Más lenta", "A tiempo", "Vela", "10+ nudos", "Motor", "Gasoil",
                "Llegada típica"])]
     typicals = {}
     from .climate import typical_run
@@ -245,11 +245,15 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
         typicals[k] = t
         rows.append([f"<b>{k}</b>: {v['label']}", D(sm.get("days_median")), DR(sm.get('days_p10'), sm.get('days_p90')),
                      D(sm.get("days_max")), f"{sm.get('on_time')}/{sm.get('years')}", f"{sm.get('sailing_pct_median')}%",
+                     f"{sm['wind10_pct_median']}%" if sm.get("wind10_pct_median") is not None else "-",
                      f"{sm.get('motor_hours_median'):.0f} h", f"{sm.get('fuel_l_median')} L",
                      fmt_dt(parse_iso(t["eta"]), lang) if t else "-"])
     story += [Paragraph(T("Routing options (live forecast, fading into past years)",
                           "Opciones de ruta (previsión actual, que da paso gradualmente a años anteriores)"), H2),
-              table(rows, [W * x for x in (.23, .085, .125, .085, .075, .085, .07, .075, .175)]), Spacer(1, 1 * mm),
+              table(rows, [W * x for x in (.2, .08, .115, .08, .07, .075, .075, .07, .075, .16)]), Spacer(1, 1 * mm),
+              Paragraph(T("10+ kn: share of the passage in at least 10 knots of true wind (option E is routed to maximise it).",
+                          "10+ nudos: parte de la travesía con al menos 10 nudos de viento real (la opción E se enruta para "
+                          "maximizarla)."), S),
               Paragraph(T("Times in UTC.", "Horas en UTC."), S), Spacer(1, 2 * mm)]
     a, c, dd = (st["strategies"].get(k, {}).get("summary", {}) for k in "ACD")
     if a and c and dd:

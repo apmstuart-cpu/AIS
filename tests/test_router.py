@@ -233,3 +233,21 @@ def test_measured_polar_follows_the_logged_percentages():
     S.register_measured(hist, name="t_measured")
     base, meas = S.table_speed(14, 130, "oyster885_std"), S.table_speed(14, 130, "t_measured")
     assert fac[(14.0, 130.0)] - 0.005 <= meas / base <= 0.84  # blended with the neighbouring wind bands (84%)
+
+
+def test_light_penalty_finds_the_breeze():
+    """Light air north of 22N, trades south of it: the most-wind setting goes south and spends far more time in 10+ kn."""
+    from yachtspeed.climate import _wind10_pct
+
+    class Split:
+        t0, data_end_h = T0, 10000
+
+        def sample(self, la, lo, t):
+            return {"wind_speed_kn": 6.0 if la > 22 else 14.0, "wind_dir_from_deg": 65.0}
+
+    kw = dict(step_h=4.0, max_hours=24 * 28, use_waves=False, use_current=False, motor_wind_below_kn=10,
+              motor_speed_kn=8.5, motor_max_h=177)
+    s, d = (28.0, -20.0), (17.0, -50.0)
+    plain = route(Split(), NO_LAND, s, T0, d, "oyster885_std", 0.85, **kw)
+    breezy = route(Split(), NO_LAND, s, T0, d, "oyster885_std", 0.85, light_penalty=(10.0, 10.0), **kw)
+    assert _wind10_pct(breezy["track"]) >= _wind10_pct(plain["track"]) + 20
