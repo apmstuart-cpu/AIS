@@ -146,8 +146,16 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
     def img(path, maxw=W, maxh=230 * mm):
         from PIL import Image as PI
 
-        iw, ih = PI.open(path).size
+        im = PI.open(path)
+        iw, ih = im.size
         k = min(maxw / iw, maxh / ih)
+        # embed at about 170 dpi on the page: sharp in print, and keeps the PDF small enough to email
+        px = int(iw * k / 72 * 170)
+        if px < iw:
+            small = folder / "_option_maps" / f"pdf_{Path(path).stem}.jpg"
+            small.parent.mkdir(exist_ok=True)
+            im.convert("RGB").resize((px, int(ih * px / iw)), PI.LANCZOS).save(small, "JPEG", quality=80, optimize=True)
+            path = small
         return Image(str(path), iw * k, ih * k)
 
     def when(iso_s):
@@ -446,7 +454,8 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
     am = folder / f"climate_{maps}_assumptions.md"
     if es:
         story.append(Paragraph("Anexo A: supuestos de la previsión y del modelo", H2))
-        for line in _assumptions_es(st, c85, hd, yrs, now, top, mk, mw, mh_, pf, s):
+        ndays = len(list(folder.glob(f"climate_{maps}_day*.jpg"))) or 4
+        for line in _assumptions_es(st, c85, hd, yrs, now, top, mk, mw, mh_, pf, s, ndays):
             story.append(Paragraph(line, ParagraphStyle("b", parent=P, leftIndent=12, bulletIndent=4, spaceAfter=2),
                                    bulletText="•"))
         story.append(PageBreak())
@@ -524,7 +533,7 @@ def build_if_stale(folder, prefix="alibi", force=False):
     return built
 
 
-def _assumptions_es(st, c85, hd, yrs, now, top, mk, mw, mh_, pf, s):
+def _assumptions_es(st, c85, hd, yrs, now, top, mk, mw, mh_, pf, s, ndays=4):
     w = st.get("model_weights") or {}
     lines = [f"<b>Modelos de previsión:</b> {', '.join(st.get('models_used') or [])}, combinados (el viento se promedia "
              f"como vector), emitidos el {st.get('issued_utc', '?')[:16].replace('T', ' ')} UTC.",
@@ -550,7 +559,9 @@ def _assumptions_es(st, c85, hd, yrs, now, top, mk, mw, mh_, pf, s):
               "previsión; la mar de popa añade hasta un 3 % (surfeo), la mar de proa y de través la frena.",
               "<b>Corriente:</b> corriente superficial media de estas fechas en 2022-2025.",
               "<b>No se modelan:</b> chubascos, rachas, cansancio de la tripulación, averías ni cambios de vela más allá de la polar.",
-              "<b>Mapas de viento:</b> cada 3 h durante los 4 primeros días; colores según la fuerza del viento; estelas "
+              "<b>Mapas de viento: los dibuja este modelo a partir de su propia combinación de previsiones, ponderada "
+              "por su precisión; no proceden de Windy.</b> "
+              f"Cada 3 h durante los {ndays} primeros días; colores según la fuerza del viento; estelas "
               "blancas que siguen el viento; los puntos de color son la ruta más típica de cada opción a esa hora."]
     return lines
 
