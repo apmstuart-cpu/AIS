@@ -407,10 +407,9 @@ def export_json(conn, cfg, client, start, dest, depart: datetime, out_path, days
     now = utcnow()
     t_end = depart + timedelta(days=days)
     grids, used = [], []
-    WeatherGrid.FORECAST_DAYS = 16  # take every forecast hour that exists (GFS reaches 16 days)
     for m in models:
         g = WeatherGrid(conn, client, bbox, depart, t_end, model_provider(m), res=res, use_marine=False).load()
-        progress(f"forecast {m}: {len(g.wind)} cells")
+        progress(f"forecast {m}: {len(g.wind)} cells" + (f" ({g.last_error})" if g.last_error and not g.wind else ""))
         if len(g.wind) >= 0.9 * len(g.lats) * len(g.lons):
             grids.append(g)
             used.append(m)
