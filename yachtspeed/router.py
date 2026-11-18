@@ -270,6 +270,12 @@ def route(grid: WeatherGrid, land, start, t0: datetime, dest, table, factor=1.0,
     finish_nm = max(15.0, 12.0 * step_h, 1.2 * d_total * math.radians(sector_deg))
     harbour_skip = harbour_nm  # (near the start and finish the land mask drops its offshore margin itself)
     approach_motor_nm = 30.0  # with an engine, the final miles can be motored if they cannot be sailed
+    # Pruning keeps, per sector of bearing from the start, the node furthest out. Far from the start a sector
+    # is tens of miles wide, so near the destination that would keep a node that has sailed PAST it over one
+    # beside it (when an island blocks the straight finish the fleet then overshoots and has to come back).
+    # So within `near_nm` of the destination each mile still to go costs three times as much: moving past the
+    # destination along the same bearing then lowers the score instead of raising it.
+    near_nm = max(60.0, 2.0 * finish_nm)
 
     def velocity(node, w, heading):
         twa_signed = ((w["wind_dir_from_deg"] - heading + 540) % 360) - 180
@@ -366,7 +372,8 @@ def route(grid: WeatherGrid, land, start, t0: datetime, dest, table, factor=1.0,
                     continue
                 key = int((off + 180) // sector_deg)
                 # prune: furthest from start per sector, tie-broken by closeness to destination
-                score = ds - 0.3 * haversine_nm(lat, lon, *dest)
+                dd = haversine_nm(lat, lon, *dest)
+                score = ds - 0.3 * dd - 2.7 * min(dd, near_nm)  # penalty rises 3 nm per nm to go inside near_nm
                 cur = new.get(key)
                 if cur is None or score > cur.extra["score"]:
                     new[key] = Node(lat, lon, node.t + timedelta(hours=step_h), node, k, side,

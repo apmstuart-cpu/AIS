@@ -184,3 +184,26 @@ def test_routes_keep_three_miles_off_the_coast():
     assert land.offshore_nm == 3.0
     assert land.is_land(28.88, -17.92) and not land.is_land(28.88, -17.92, core=True)  # 2.4 nm off La Palma
     assert not land.is_land(28.95, -17.92)  # 6.6 nm off: open water
+
+
+def test_island_across_the_finish_is_rounded_not_overshot():
+    """An ocean crossing whose straight finish is blocked by an island (as Antigua blocks English Harbour
+    from the north): the fleet must work round it, not sail on past the destination and come back."""
+    from yachtspeed.geo import initial_bearing
+
+    s, dest = (28.857, -13.817), (17.0, -61.8)
+    b = initial_bearing(*dest, *s)
+
+    def off(p, nm, brg):
+        return (p[0] + nm / 60 * math.cos(math.radians(brg)),
+                p[1] + nm / 60 * math.sin(math.radians(brg)) / math.cos(math.radians(p[0])))
+
+    c = off(dest, 15, b)
+    corners = [off(off(c, 15, b + 90), 3, b), off(off(c, 15, b - 90), 3, b), off(off(c, 15, b - 90), -3, b),
+               off(off(c, 15, b + 90), -3, b)]
+    land = LandMask([[[lo, la] for la, lo in corners]], (10, -70, 35, -5), 0.024, 3.0)
+    r = route(ConstGrid(16, 60.0, T0), land, s, T0, dest, "oyster885_std", 0.85, step_h=4.0, max_hours=24 * 28,
+              use_waves=False, use_current=False, motor_wind_below_kn=7, motor_speed_kn=8.5, motor_max_h=177)
+    assert r["status"] == "ok"
+    past = max((haversine_nm(p["lat"], p["lon"], *dest) for p in r["track"] if p["lon"] < dest[1] - 0.01), default=0)
+    assert past < 60  # before the fix: 141 nm past the destination
