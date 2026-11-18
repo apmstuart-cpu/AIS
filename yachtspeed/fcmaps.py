@@ -370,3 +370,162 @@ def assumptions_md(info, cfg, strategies_json=None, climate_json=None) -> str:
               "colours by wind strength, "
               "white streaks flowing with the wind; the coloured dots are each option's most typical routed course at that hour."]
     return "\n".join(lines) + "\n"
+
+
+def _rdp(pts, eps):
+    """Douglas-Peucker simplification of a polyline [(x, y)] to tolerance `eps` (degrees)."""
+    if len(pts) < 3:
+        return pts
+    (x0, y0), (x1, y1) = pts[0], pts[-1]
+    dx, dy = x1 - x0, y1 - y0
+    n = math.hypot(dx, dy) or 1e-12
+    dmax, idx = 0.0, 0
+    for i in range(1, len(pts) - 1):
+        d = abs(dy * (pts[i][0] - x0) - dx * (pts[i][1] - y0)) / n
+        if d > dmax:
+            dmax, idx = d, i
+    if dmax <= eps:
+        return [pts[0], pts[-1]]
+    return _rdp(pts[:idx + 1], eps)[:-1] + _rdp(pts[idx:], eps)
+
+
+def export_json(conn, cfg, client, start, dest, depart: datetime, out_path, days=16, step_h=3, res=2.5, margin=4.0,
+                models=("ecmwf", "aifs", "gfs", "icon"), fade=(2.0, 15.0), strategies_json=None, years=None,
+                waves=True, progress=print) -> dict:
+    """The weather our passage model uses, as numbers for an interactive viewer: on the router's own grid, every
+    `step_h` hours for `days` days from departure. The skill-weighted forecast blend fades into the El Nino-weighted
+    mean of past years exactly as the routing does (forecast only until fade[0] days after issue, past years only
+    from fade[1] days, or from the end of the forecast data if sooner). Also the coastline and each route option's
+    most typical course, so the viewer needs nothing else."""
+    from . import climate
+    from .geo import haversine_nm
+    from .land import EATL_10M, WORLD_10M, WORLD_50M, _intersects, _load
+    from .router import BlendGrid, WeatherGrid, _uv_from, grid_bbox
+    from .weather import model_provider
+
+    bbox = grid_bbox(start, dest, res=res, margin=margin)
+    now = utcnow()
+    t_end = depart + timedelta(days=days)
+    grids, used = [], []
+    WeatherGrid.FORECAST_DAYS = 16  # take every forecast hour that exists (GFS reaches 16 days)
+    for m in models:
+        g = WeatherGrid(conn, client, bbox, depart, t_end, model_provider(m), res=res, use_marine=False).load()
+        progress(f"forecast {m}: {len(g.wind)} cells")
+        if len(g.wind) >= 0.9 * len(g.lats) * len(g.lons):
+            grids.append(g)
+            used.append(m)
+    weights = None
+    if grids and getattr(cfg, "skill_weighting", False):
+        from .skill import Weights
+
+        weights = Weights(conn, used, cfg.skill_window_days, cfg.skill_min_checks)
+    blend = BlendGrid(grids, used, weights) if grids else None
+    if blend is not None:
+        blend.data_end_h = max(g.data_end_h for g in grids)
+        fs, fe = climate.fade_window(now, blend, depart, *fade)
+    else:
+        fs = fe = depart
+    sea = None
+    if waves:
+        try:
+            sea = WeatherGrid(conn, client, bbox, depart, t_end, model_provider(used[0] if used else "ecmwf"), res=res,
+                              use_marine=True).load()
+        except Exception as e:  # waves are a bonus
+            progress(f"waves unavailable: {str(e)[:80]}")
+    # past years, weighted to this year's El Nino, for the part of the passage the forecast does not reach
+    stored = {r[0]: r[1] for r in conn.execute("SELECT year, count(*) FROM climate_cells GROUP BY year")} \
+        if conn.execute("SELECT name FROM sqlite_master WHERE name='climate_cells'").fetchone() else {}
+    cells = climate.cells_for(bbox, res)
+    yrs = [y for y in (years or sorted(stored)) if stored.get(y, 0) >= 0.9 * len(cells)]
+    try:
+        _, wts = climate.enso_weights(climate.oni_table(conn), yrs)
+        yw = {y: wts[y][1] for y in yrs if y in wts}
+    except Exception:
+        yw = {y: 1.0 for y in yrs}
+    clims = []
+    for y in yrs:
+        d0 = depart.replace(year=y)
+        clims.append((climate.ClimateGrid(conn, y, bbox, d0, d0 + timedelta(days=days), res).load(), d0 - depart,
+                      yw.get(y, 1.0)))
+    progress(f"past years: {len(clims)}")
+
+    lats = [round(bbox[0] + i * res, 3) for i in range(int(round((bbox[2] - bbox[0]) / res)) + 1)]
+    lons = [round(bbox[1] + j * res, 3) for j in range(int(round((bbox[3] - bbox[1]) / res)) + 1)]
+    times, spd, wdir, fcs, wh, wd, wp = [], [], [], [], [], [], []
+    for n in range(int(days * 24 / step_h) + 1):
+        t = depart + timedelta(hours=n * step_h)
+        if t <= fs:
+            wf = 1.0
+        elif t >= fe:
+            wf = 0.0
+        else:
+            wf = 1.0 - (t - fs).total_seconds() / max(1.0, (fe - fs).total_seconds())
+        times.append(iso(t))
+        fcs.append(round(100 * wf))
+        for la in lats:
+            for lo in lons:
+                f = blend.sample(la, lo, t) if (blend is not None and wf > 0) else None
+                acc_u = acc_v = acc_s = tw = 0.0
+                if wf < 1 or f is None:
+                    for g, shift, w in clims:
+                        c = g.sample(la, lo, t + shift)
+                        if c and c.get("wind_speed_kn") is not None:
+                            u, v = _uv_from(c["wind_speed_kn"], c["wind_dir_from_deg"])
+                            acc_u, acc_v, acc_s, tw = acc_u + u * w, acc_v + v * w, acc_s + c["wind_speed_kn"] * w, tw + w
+                ff = wf if (f is not None and tw) else (1.0 if f is not None else 0.0)
+                if f is None and not tw:
+                    spd.append(None)
+                    wdir.append(None)
+                else:
+                    fu, fv = _uv_from(f["wind_speed_kn"], f["wind_dir_from_deg"]) if f else (0.0, 0.0)
+                    cu, cv, cs = (acc_u / tw, acc_v / tw, acc_s / tw) if tw else (0.0, 0.0, 0.0)
+                    s = ff * (f["wind_speed_kn"] if f else 0.0) + (1 - ff) * cs
+                    u, v = ff * fu + (1 - ff) * cu, ff * fv + (1 - ff) * cv
+                    spd.append(round(s, 1))
+                    wdir.append(round((math.degrees(math.atan2(-u, -v)) + 360) % 360))
+                m = sea.sample(la, lo, t) if sea is not None else None
+                if m and m.get("wave_height_m") is not None:
+                    wh.append(round(m["wave_height_m"], 1))
+                    wd.append(round(m["wave_dir_from_deg"]))
+                    wp.append(round(m["wave_period_s"]) if m.get("wave_period_s") else None)
+                else:
+                    wh.append(None)
+                    wd.append(None)
+                    wp.append(None)
+    # coastline, simplified to ~2 km
+    world = str(WORLD_10M) if WORLD_10M.exists() else str(WORLD_50M)
+    lb = (bbox[0] - 1, bbox[1] - 1, bbox[2] + 1, bbox[3] + 1)
+    rings = [it[0] for it in _load(world) if _intersects(it, lb)]
+    if world == str(WORLD_50M):
+        rings += [it[0] for it in _load(str(EATL_10M)) if _intersects(it, lb)]
+    land = []
+    for r in rings:
+        ext = max(max(p[0] for p in r) - min(p[0] for p in r), max(p[1] for p in r) - min(p[1] for p in r))
+        pts = [(round(p[0], 3), round(p[1], 3)) for p in r]
+        far = max(range(len(pts)), key=lambda i: (pts[i][0] - pts[0][0]) ** 2 + (pts[i][1] - pts[0][1]) ** 2)
+        eps = min(0.02, ext / 12)  # small islands keep their shape
+        s = _rdp(pts[:far + 1], eps)[:-1] + _rdp(pts[far:], eps)  # a closed outline, simplified in two halves
+        if len(s) >= 3:
+            land.append([[round(x, 3), round(y, 3)] for x, y in s])
+    # each option's most typical course
+    routes = {}
+    if strategies_json and Path(strategies_json).exists():
+        from .climate import typical_run
+
+        st = json.loads(Path(strategies_json).read_text())
+        for k, v in st.get("strategies", {}).items():
+            tr = typical_run(v.get("results", []))
+            if tr:
+                routes[k] = {"label": v["label"], "eta": tr["eta"], "days": tr["days"],
+                             "median": (v.get("summary") or {}).get("days_median"),
+                             "track": [[p[0], round(p[1], 3), round(p[2], 3), bool(p[3])] for p in tr["track"]]}
+    out = {"issued_utc": iso(now), "depart": iso(depart), "start": list(start), "dest": list(dest),
+           "dest_nm": round(haversine_nm(*start, *dest)), "bbox": bbox, "res": res, "lats": lats, "lons": lons,
+           "step_h": step_h, "times": times, "forecast_pct": fcs, "models": used,
+           "weights": ({f"{n} d ahead": {m: round(100 * x) for m, x in w.items()} for n, w in weights.by_day.items()}
+                       if weights is not None else None),
+           "fade_utc": [iso(fs), iso(fe)], "years": yrs, "speed_kn": spd, "dir_from": wdir,
+           "wave_m": wh, "wave_dir_from": wd, "wave_s": wp, "land": land, "routes": routes}
+    Path(out_path).write_text(json.dumps(out, separators=(",", ":")))
+    return {"times": len(times), "cells": len(lats) * len(lons), "models": used, "years": len(yrs),
+            "forecast_until": iso(fe), "routes": list(routes), "bytes": Path(out_path).stat().st_size}

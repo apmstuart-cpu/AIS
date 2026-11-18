@@ -48,3 +48,10 @@ def test_passage_pdf_needs_its_inputs(tmp_path):
 
     assert passage_pdf.build_if_stale(tmp_path) == []  # nothing published yet: nothing built
     assert passage_pdf.fmt_dt(datetime(2026, 12, 3, 10, 22), "es") == "jue 03 dic 10:22"
+
+
+def test_rdp_keeps_a_closed_island_outline():
+    ring = [(0, 0), (0.05, 0.01), (0.1, 0.0), (0.1, 0.1), (0.05, 0.12), (0, 0.1), (0, 0)]
+    far = 3
+    s = fcmaps._rdp(ring[:far + 1], 0.005)[:-1] + fcmaps._rdp(ring[far:], 0.005)
+    assert len(s) >= 4 and s[0] == s[-1]

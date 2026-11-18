@@ -861,6 +861,25 @@ def cmd_polar_history(cfg, a):
     print(md)
 
 
+def cmd_wind_export(cfg, a):
+    """The passage model's weather as numbers, for the interactive wind viewer."""
+    from datetime import datetime as _dt, timezone as _tz
+    from pathlib import Path as _P
+
+    from . import fcmaps
+    from .speedtable import parse_destination
+
+    conn = _conn(cfg)
+    _, start = parse_destination(a.frm)
+    _, dest = parse_destination(a.to)
+    depart = _dt.fromisoformat(a.depart).astimezone(_tz.utc)
+    out = _P(a.out_dir) / f"climate_{a.name}_wind.json"
+    info = fcmaps.export_json(conn, cfg, _client(conn, cfg), start, dest, depart, out, days=a.days,
+                              strategies_json=a.strategies, years=_years(a.years) if a.years else None,
+                              waves=not a.no_waves, progress=lambda m: print(" ", m, flush=True))
+    print(json.dumps(info, indent=1))
+
+
 def cmd_passage_pdf(cfg, a):
     """The passage write-up as PDFs (English and Spanish) from the published climate_* results."""
     from . import passage_pdf
@@ -1198,6 +1217,18 @@ def build_parser():
     s.add_argument("--max-calls-per-day", type=int, default=1500)
     s.add_argument("--out-dir", default="/var/lib/yachtspeed/report")
     s.set_defaults(fn=cmd_polar_history)
+    s = sub.add_parser("wind-export", help="the passage model's weather as numbers, for the wind viewer")
+    s.add_argument("--from", dest="frm", required=True)
+    s.add_argument("--to", required=True)
+    s.add_argument("--depart", required=True)
+    s.add_argument("--days", type=int, default=16)
+    s.add_argument("--years", default=None, help="past years to blend in (default: all stored)")
+    s.add_argument("--no-waves", action="store_true")
+    s.add_argument("--strategies", default="/var/lib/yachtspeed/report/climate_alibi_strategies.json")
+    s.add_argument("--name", default="alibi")
+    s.add_argument("--out-dir", default="/var/lib/yachtspeed/report")
+    s.set_defaults(fn=cmd_wind_export)
+
     s = sub.add_parser("passage-pdf", help="passage PDFs (English and Spanish) from the climate_* results")
     s.add_argument("--dir", default="/var/lib/yachtspeed/report")
     s.add_argument("--prefix", default="alibi")
