@@ -2,7 +2,8 @@
 # Rerun the passage model as soon as a new full-range ECMWF forecast is out, instead of on a clock.
 # Checks Open-Meteo's ECMWF status file; when a new 00 or 12 UTC run (the 15-day ones) has been available
 # for WAIT_MIN minutes (so AIFS, GFS and ICON have usually caught up), starts deploy/rerun-passage.sh,
-# unless a rerun is already going. Stops doing anything after STOP_AFTER (departure).
+# unless a rerun is already going. Before departure the rerun routes from Rubicón; under way it routes from her
+# latest position; once she has arrived it does nothing (rerun-passage.sh decides). Quiet after STOP_AFTER.
 # Run it every 20 minutes:
 #   sudo systemd-run --on-calendar="*:0/20" --unit=ecmwf-watch ~/ais/deploy/ecmwf-watch.sh
 # Follow it with:  journalctl -u ecmwf-watch -n 20 --no-pager
@@ -10,7 +11,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 STATE="${STATE:-/var/lib/yachtspeed/ecmwf_last_rerun}"
 WAIT_MIN="${WAIT_MIN:-30}"
-STOP_AFTER="${STOP_AFTER:-2026-11-20T10:00:00Z}"
+STOP_AFTER="${STOP_AFTER:-2026-12-07T04:00:00Z}"  # the arrival deadline
 MAXTWA="${MAXTWA:-150}"
 
 now=$(date -u +%s)

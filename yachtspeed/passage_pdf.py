@@ -205,17 +205,25 @@ def build(folder, out_pdf, name="alibi_antigua", strategies="alibi_strategies", 
     if es:
         mk, mw = f"{mk}".replace(".", ","), f"{mw}".replace(".", ",")
     pct = round(100 * (hs.get("probability_enso_weighted") or 0))
-    story += [Paragraph(f"{c85['yacht']}: " + T("Rubicón to English Harbour, Antigua", "de Rubicón a English Harbour, Antigua"), H1),
+    from .geo import haversine_nm as _hv
+
+    underway = _hv(*st["from"], 28.857, -13.817) > 5  # routing from her position at sea, not from Rubicón
+    pos_txt = f"{dm(st['from'][0], 'N', 'S')} {dm(st['from'][1], 'E', 'W')}"
+    story += [Paragraph(f"{c85['yacht']}: " + (T(f"from {pos_txt} to English Harbour, Antigua",
+                                                  f"de {pos_txt} a English Harbour, Antigua") if underway else
+                                                T("Rubicón to English Harbour, Antigua", "de Rubicón a English Harbour, Antigua")), H1),
               Paragraph("<b>Shirley Heights waits for no man...</b>", ParagraphStyle("tag", parent=P, fontSize=12,
                                                                                     leading=15, spaceAfter=4)),
               Paragraph(T(f"Passage model and routing options. Forecast issued {when(st['issued_utc'])}; built {built} UTC.",
                           f"Modelo de travesía y opciones de ruta. Previsión emitida el {when(st['issued_utc'])}; "
                           f"elaborado el {built} UTC."), S), Spacer(1, 4 * mm),
-              Paragraph(T(f"<b>Leaving</b> {fmt_dt(dep)} UTC. <b>Deadline</b> {fmt_dt(ddl)} UTC "
+              Paragraph(T(("<b>Under way.</b> Routed from her tracked position at " if underway else "<b>Leaving</b> ")
+                          + f"{fmt_dt(dep)} UTC. <b>Deadline</b> {fmt_dt(ddl)} UTC "
                           f"({fmt_dt(ddl - timedelta(hours=4))} Antigua time), {D(st['allowed_days'])} days. Polar {s.get('table')} x {pf}; "
                           f"motor at {mk} kn below {mw} kn of wind, "
                           f"at most {mh_:.0f} h of motoring within the fuel consumption limitation.",
-                          f"<b>Salida</b> {fmt_dt(dep, lang)} UTC. <b>Fecha límite</b> {fmt_dt(ddl, lang)} UTC "
+                          ("<b>En navegación.</b> Enrutado desde su posición registrada el " if underway else "<b>Salida</b> ")
+                          + f"{fmt_dt(dep, lang)} UTC. <b>Fecha límite</b> {fmt_dt(ddl, lang)} UTC "
                           f"({fmt_dt(ddl - timedelta(hours=4), lang)} hora de Antigua), {D(st['allowed_days'])} días. Polar {s.get('table')} x {pf}; "
                           f"motor a {mk} nudos con menos de {mw} nudos de viento, "
                           f"como máximo {mh_:.0f} h a motor dentro del límite de consumo de combustible."), P),

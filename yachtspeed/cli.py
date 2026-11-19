@@ -779,6 +779,11 @@ def cmd_strategies(cfg, a):
         from . import router as _router
 
         _router.DEBUG = []
+    from .geo import haversine_nm as _hav
+
+    for k in [k for k, v in strategies.items() if v.get("via")]:  # under way: a waypoint she is past is no option
+        if _hav(*start, *dest) <= _hav(*strategies[k]["via"], *dest) + 30:
+            strategies.pop(k)
     if a.via:
         la, lo = (float(x) for x in a.via.split(","))
         strategies["B"] = {"label": f"classic: south-west to {la:g}N {abs(lo):g}W first", "via": (la, lo)}
@@ -879,6 +884,40 @@ def cmd_polar_history(cfg, a):
     (out / f"climate_{slug}_polar_history.json").write_text(json.dumps(res, indent=1, default=str))
     (out / f"climate_{slug}_polar_history.md").write_text(md)
     print(md)
+
+
+def cmd_passage_start(cfg, a):
+    """Where the next passage rerun should start: the planned port before departure (or while she is still
+    in it), her latest tracked position once under way, or nothing once she has arrived. Prints shell lines
+    MODE=..., FROM=..., DEPART=..., LABEL=... for deploy/rerun-passage.sh."""
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+    from .geo import haversine_nm, parse_iso, utcnow
+    from .speedtable import parse_destination
+
+    conn = _conn(cfg)
+    _, start = parse_destination(a.frm)
+    _, dest = parse_destination(a.to)
+    planned = _dt.fromisoformat(a.depart).astimezone(_tz.utc)
+    now = utcnow()
+    row = conn.execute("SELECT provider_time_utc, lat, lon FROM ais_reports WHERE mmsi=? "
+                       "ORDER BY provider_time_utc DESC LIMIT 1", (_mmsi(cfg, a.yacht),)).fetchone()
+    fix = (parse_iso(row[0]), row[1], row[2]) if row else None
+    next_hour = (now + _td(hours=1)).replace(minute=0, second=0, microsecond=0)
+    mode, frm, dep, label = "planned", a.frm, max(planned, next_hour), f"from {a.frm} as planned"
+    if fix and now >= planned and (now - fix[0]) <= _td(hours=a.max_age_h):
+        if haversine_nm(fix[1], fix[2], *dest) <= a.arrived_nm:
+            mode, label = "arrived", f"arrived ({fix[0]:%d %b %H:%M} UTC)"
+        elif haversine_nm(fix[1], fix[2], *start) > a.harbour_nm:
+            t0 = fix[0].replace(minute=0, second=0, microsecond=0)
+            mode, frm, dep = "underway", f"{fix[1]:.3f},{fix[2]:.3f}", t0
+            label = f"from her position {fix[1]:.2f},{fix[2]:.2f} at {fix[0]:%d %b %H:%M} UTC"
+    elif fix is None and now >= planned:
+        label += " (no recent position: still assuming the planned start)"
+    print(f"MODE={mode}")
+    print(f"FROM='{frm}'")
+    print(f"DEPART={dep.strftime('%Y-%m-%dT%H:%M+00:00')}")
+    print(f"LABEL='{label}'")
 
 
 def cmd_wind_export(cfg, a):
@@ -1241,6 +1280,16 @@ def build_parser():
     s.add_argument("--max-calls-per-day", type=int, default=1500)
     s.add_argument("--out-dir", default="/var/lib/yachtspeed/report")
     s.set_defaults(fn=cmd_polar_history)
+    s = sub.add_parser("passage-start", help="where a passage rerun starts: planned port, her position, or arrived")
+    s.add_argument("--yacht", required=True)
+    s.add_argument("--from", dest="frm", required=True)
+    s.add_argument("--to", required=True)
+    s.add_argument("--depart", required=True, help="planned departure")
+    s.add_argument("--max-age-h", type=float, default=12.0, help="ignore a position older than this")
+    s.add_argument("--harbour-nm", type=float, default=5.0, help="within this of the start she has not left")
+    s.add_argument("--arrived-nm", type=float, default=10.0, help="within this of the destination she has arrived")
+    s.set_defaults(fn=cmd_passage_start)
+
     s = sub.add_parser("wind-export", help="the passage model's weather as numbers, for the wind viewer")
     s.add_argument("--from", dest="frm", required=True)
     s.add_argument("--to", required=True)
