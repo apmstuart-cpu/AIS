@@ -4,9 +4,9 @@
 # for WAIT_MIN minutes (so AIFS, GFS and ICON have usually caught up), starts deploy/rerun-passage.sh,
 # unless a rerun is already going. Before departure the rerun routes from Rubicón; under way it routes from her
 # latest position; once she has arrived it does nothing (rerun-passage.sh decides). Quiet after STOP_AFTER.
-# Run it every 20 minutes:
-#   sudo systemd-run --on-calendar="*:0/20" --unit=ecmwf-watch ~/ais/deploy/ecmwf-watch.sh
-# Follow it with:  journalctl -u ecmwf-watch -n 20 --no-pager
+# Installed permanently by install.sh as yachtspeed-ecmwf-watch.timer (every 20 minutes, survives reboots).
+# Follow it with:  journalctl -u yachtspeed-ecmwf-watch -n 20 --no-pager
+# Pause it with:   sudo systemctl stop yachtspeed-ecmwf-watch.timer   (resume: start)
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 STATE="${STATE:-/var/lib/yachtspeed/ecmwf_last_rerun}"
@@ -16,7 +16,7 @@ MAXTWA="${MAXTWA:-150}"
 
 now=$(date -u +%s)
 stop=$(date -u -d "$STOP_AFTER" +%s)
-if [ "$now" -ge "$stop" ]; then echo "after $STOP_AFTER: nothing to do (stop me with: systemctl stop ecmwf-watch.timer)"; exit 0; fi
+if [ "$now" -ge "$stop" ]; then echo "after $STOP_AFTER: nothing to do (stop me with: systemctl disable --now yachtspeed-ecmwf-watch.timer)"; exit 0; fi
 
 meta=$(curl -sS -m 30 https://api.open-meteo.com/data/ecmwf_ifs025/static/meta.json) || { echo "ECMWF status unavailable, will retry"; exit 0; }
 read -r init avail dend < <(python3 -c '

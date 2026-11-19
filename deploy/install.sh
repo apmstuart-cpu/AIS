@@ -36,7 +36,8 @@ mkdir -p /var/log/journal && systemd-tmpfiles --create --prefix /var/log/journal
 systemctl restart systemd-journald
 
 systemctl daemon-reload
-systemctl enable --now yachtspeed-backup.timer yachtspeed-yb.timer yachtspeed-fixes.timer yachtspeed-report.timer yachtspeed-screenshots.timer yachtspeed-skill.timer
+systemctl stop ecmwf-watch.timer 2>/dev/null || true  # the old temporary watcher, replaced by the permanent one
+systemctl enable --now yachtspeed-backup.timer yachtspeed-yb.timer yachtspeed-fixes.timer yachtspeed-report.timer yachtspeed-screenshots.timer yachtspeed-skill.timer yachtspeed-ecmwf-watch.timer
 systemctl enable yachtspeed-collector yachtspeed-enricher
 systemctl restart yachtspeed-enricher
 if grep -q '^AISSTREAM_API_KEY=.\+' /etc/yachtspeed/env && grep -q '^mmsi = "[0-9]\{9\}"' /etc/yachtspeed/config.toml; then

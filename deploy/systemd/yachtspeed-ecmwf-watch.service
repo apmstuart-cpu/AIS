@@ -1,0 +1,9 @@
+[Unit]
+Description=yachtspeed: rerun the passage model when a new full ECMWF forecast is out
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+# root: it starts the rerun as its own background unit (systemd-run), which then runs as the yachtspeed user
+ExecStart=/opt/yachtspeed/deploy/ecmwf-watch.sh

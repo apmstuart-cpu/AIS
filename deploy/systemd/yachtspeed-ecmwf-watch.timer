@@ -1,0 +1,9 @@
+[Unit]
+Description=Check for a new ECMWF forecast every 20 minutes and rerun the passage model
+
+[Timer]
+OnCalendar=*:0/20
+Persistent=true
+
+[Install]
+WantedBy=timers.target
