@@ -273,3 +273,8 @@ def test_patch_redoes_only_the_chosen_option_history(tmp_path, monkeypatch, cfg)
     assert r["strategies"]["A"]["history"] == [keep] and r["strategies"]["D"]["results"] == [keep]
     assert r["strategies"]["D"]["history"] == []  # no stored 2020 weather here: redone (empty), not the old 28.3
     assert r["issued_utc"] == "2026-11-17T22:25:00Z" and r["status"] == "complete"
+
+
+def test_e_and_f_sail_no_deeper_than_140():
+    assert climate.DEFAULT_STRATEGIES["E"]["max_twa"] == 140.0 and climate.DEFAULT_STRATEGIES["F"]["max_twa"] == 140.0
+    assert "max_twa" not in climate.DEFAULT_STRATEGIES["A"]

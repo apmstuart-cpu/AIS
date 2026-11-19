@@ -793,8 +793,9 @@ DEFAULT_STRATEGIES = {
     "B": {"label": "classic: south-west to 22N 30W first", "via": (22.0, -30.0)},
     "C": {"label": "fuel-saving: at most 30 h motoring in the first 72 h", "motor_early": (72.0, 30.0)},
     "D": {"label": "more sailing: motor only below 7 kn of wind", "motor_below": 7.0},
-    "E": {"label": "most wind: maximise the time in 10+ kn of wind", "light_penalty": (10.0, 10.0)},
-    "F": {"label": "via Cape Verde: round 17.5N 25.5W, north-west of Santo Antao", "via": (17.5, -25.5)},
+    "E": {"label": "most wind: maximise the time in 10+ kn of wind (no deeper than 140 deg)", "light_penalty": (10.0, 10.0), "max_twa": 140.0},
+    "F": {"label": "via Cape Verde: round 17.5N 25.5W, north-west of Santo Antao (no deeper than 140 deg)", "via": (17.5, -25.5),
+          "max_twa": 140.0},
 }
 
 
@@ -822,7 +823,7 @@ def run_strategies(conn, cfg, y, start, dest, depart, deadline, years, res=2.5, 
                         "max_twa_deg": _router_mod.MAX_TWA,
                         "motor_speed_kn": motor_speed_kn, "motor_max_h": motor_max_h, "burn_lph": burn_lph},
            "strategies": {k: {"label": v["label"], "via": v.get("via"), "motor_early": v.get("motor_early"),
-                              "light_penalty": v.get("light_penalty"),
+                              "light_penalty": v.get("light_penalty"), "max_twa": v.get("max_twa"),
                               "motor_below": v.get("motor_below"), "motor_max_h": v.get("motor_max_h"),
                               "results": [], "history": []} for k, v in strategies.items()},
            "status": "running"}
@@ -943,6 +944,8 @@ def run_strategies(conn, cfg, y, start, dest, depart, deadline, years, res=2.5, 
 def _strategy_year(grid, t0, st, yr, land, start, dest, y, allow_h, max_days, motor_max_h, kw):
     """Route one strategy through one year's weather; the result row stored for it."""
     kw["motor_wind_below_kn"] = st.get("motor_below", kw["motor_wind_below_kn"])
+    if st.get("max_twa") is not None:  # this option's own limit on how deep she sails (else the run's)
+        kw["max_twa"] = st["max_twa"]
     cap = motor_max_h if st.get("motor_max_h") is None else (
         st["motor_max_h"] if motor_max_h is None else min(motor_max_h, st["motor_max_h"]))
     if st.get("via"):

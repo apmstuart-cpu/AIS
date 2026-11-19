@@ -30,8 +30,8 @@ ES_LABELS = {
     "B": "clásica: rumbo suroeste hasta 22N 30W primero",
     "C": "ahorro de combustible: como máximo 30 h a motor en las primeras 72 h",
     "D": "más vela: motor solo con menos de 7 nudos de viento",
-    "E": "más viento: el máximo tiempo con 10 nudos o más",
-    "F": "vía Cabo Verde: doblar 17,5N 25,5W, al noroeste de Santo Antão",
+    "E": "más viento: el máximo tiempo con 10 nudos o más (no más de 140° del viento)",
+    "F": "vía Cabo Verde: doblar 17,5N 25,5W, al noroeste de Santo Antão (no más de 140° del viento)",
 }
 ES_PHASE = {"El Nino": "El Niño", "La Nina": "La Niña", "neutral": "neutro"}
 
