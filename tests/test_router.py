@@ -251,3 +251,13 @@ def test_light_penalty_finds_the_breeze():
     plain = route(Split(), NO_LAND, s, T0, d, "oyster885_std", 0.85, **kw)
     breezy = route(Split(), NO_LAND, s, T0, d, "oyster885_std", 0.85, light_penalty=(10.0, 10.0), **kw)
     assert _wind10_pct(breezy["track"]) >= _wind10_pct(plain["track"]) + 20
+
+
+def test_final_leg_records_motoring_and_never_sails_deeper_than_max_twa():
+    """Dead downwind into a harbour with max_twa 150: the last leg may be motored, and is labelled as such."""
+    g = ConstGrid(6, 90.0, T0)  # light easterly: motoring weather, destination due west
+    r = route(g, NO_LAND, (20.0, -30.0), T0, (20.0, -30.5), "oyster885_std", 0.85, step_h=1.0,
+              motor_wind_below_kn=10, motor_speed_kn=8.5, max_twa=150)
+    assert r["status"] == "ok" and r["track"][-1]["motor"] is True and r["motor_hours"] > 0
+    sail = [p for p in r["track"][1:] if not p.get("motor") and p.get("twa_deg") is not None]
+    assert all(p["twa_deg"] <= 150 for p in sail)

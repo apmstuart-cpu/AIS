@@ -354,7 +354,8 @@ def route(grid: WeatherGrid, land, start, t0: datetime, dest, table, factor=1.0,
                         land.segment_clear(node.lat, node.lon, *dest, skip_near=[dest, start], skip_nm=harbour_skip):
                     arr = node.t + timedelta(hours=d / sog_along + pen)
                     if best is None or arr < best[0]:
-                        best = (arr, node, {"heading": h_dest, "sog": sog_along, "side": side, "twa": twa})
+                        best = (arr, node, {"heading": h_dest, "sog": sog_along, "side": side, "twa": twa,
+                                            "motor": bool(_mot), "tws": w["wind_speed_kn"]})
             for k in range(0, 360, heading_step):
                 vel = velocity(node, w, k)
                 if not vel:
@@ -431,7 +432,8 @@ def route(grid: WeatherGrid, land, start, t0: datetime, dest, table, factor=1.0,
         if node.side and fin["side"] != node.side:
             maneuvers += 1
         pts.append({"time_utc": iso(arr), "lat": dest[0], "lon": dest[1], "heading": round(fin["heading"]),
-                    "sog_kn": round(fin["sog"], 2), "tws_kn": None, "twa_deg": round(fin["twa"])})
+                    "sog_kn": round(fin["sog"], 2), "tws_kn": round(fin["tws"], 1) if fin.get("tws") is not None else None,
+                    "twa_deg": round(fin["twa"]), "motor": bool(fin.get("motor"))})
     sailed = sum(haversine_nm(a["lat"], a["lon"], b["lat"], b["lon"]) for a, b in zip(pts, pts[1:]))
     motor_h = sum((parse_iso(b["time_utc"]) - parse_iso(a["time_utc"])).total_seconds() / 3600
                   for a, b in zip(pts, pts[1:]) if b.get("motor"))
