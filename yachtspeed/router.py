@@ -250,16 +250,47 @@ def _move(lat, lon, ve_kn, vn_kn, hours):
 
 DEBUG = None  # set to a list to collect per-step search statistics (yachtspeed strategies --debug)
 MAX_TWA = None  # default for route(max_twa=...): deepest true wind angle allowed under sail (None = any)
+DAYLIGHT_GYBES = True  # gybe only while the sun is up (tacks and motoring are allowed at any hour)
+
+
+def sun_elevation(lat: float, lon: float, t: datetime) -> float:
+    """Solar elevation in degrees (NOAA's approximation, good to a fraction of a degree)."""
+    t = t.astimezone(timezone.utc)
+    doy = t.timetuple().tm_yday
+    hr = t.hour + t.minute / 60 + t.second / 3600
+    g = 2 * math.pi / 365 * (doy - 1 + (hr - 12) / 24)
+    decl = (0.006918 - 0.399912 * math.cos(g) + 0.070257 * math.sin(g) - 0.006758 * math.cos(2 * g)
+            + 0.000907 * math.sin(2 * g) - 0.002697 * math.cos(3 * g) + 0.00148 * math.sin(3 * g))
+    eqt = 229.18 * (0.000075 + 0.001868 * math.cos(g) - 0.032077 * math.sin(g)
+                    - 0.014615 * math.cos(2 * g) - 0.040849 * math.sin(2 * g))
+    ha = math.radians((hr * 60 + eqt + 4 * lon) / 4 - 180)
+    la = math.radians(lat)
+    cz = math.sin(la) * math.sin(decl) + math.cos(la) * math.cos(decl) * math.cos(ha)
+    return 90 - math.degrees(math.acos(max(-1.0, min(1.0, cz))))
+
+
+def is_daylight(lat: float, lon: float, t: datetime) -> bool:
+    """Between sunrise and sunset (sun's upper limb above the horizon, with refraction)."""
+    return sun_elevation(lat, lon, t) > -0.833
 
 
 def route(grid: WeatherGrid, land, start, t0: datetime, dest, table, factor=1.0, step_h=1.0,
           heading_step=5, sector_deg=2.0, maneuver_min=3.0, max_hours=240, use_waves=True,
           use_current=True, arrive_nm=1.0, harbour_nm=2.0, motor_wind_below_kn=None,
-          motor_speed_kn=7.0, motor_max_h=None, motor_early=None, max_twa=None, light_penalty=None) -> dict:
+          motor_speed_kn=7.0, motor_max_h=None, motor_early=None, max_twa=None, light_penalty=None,
+          daylight_gybes=None) -> dict:
     """Isochrone routing. Returns dict with ETA, track and summary, or status 'no_route'.
     `max_twa`: never sail deeper than this true wind angle (e.g. 150 = broad reach, no dead running, no risk of a
     crash gybe); headings deeper than that are only allowed under engine."""
     max_twa = MAX_TWA if max_twa is None else max_twa
+    daylight_gybes = DAYLIGHT_GYBES if daylight_gybes is None else daylight_gybes
+
+    def night_gybe(node, side, twa, mot):
+        """A gybe under sail while the sun is down. A change of side is a gybe when the bow turns through dead
+        downwind on the way, i.e. the old and new true wind angles add up to more than 180 deg (a tack turns through
+        the wind's eye)."""
+        return (daylight_gybes and not mot and node.side and side != node.side and twa is not None
+                and twa + (node.twa or 0.0) > 180 and not is_daylight(node.lat, node.lon, node.t))
     # light_penalty = (kn, nm): each hour spent in wind under `kn` costs `nm` of progress when choosing between
     # routes, so the search prefers one that stays in the breeze (more time in 10+ kn) at some cost in distance
     light_kn, light_nm = light_penalty if light_penalty else (0.0, 0.0)
@@ -350,7 +381,7 @@ def route(grid: WeatherGrid, land, start, t0: datetime, dest, table, factor=1.0,
                 ve, vn, side, twa, _mot = vel
                 sog_along = ve * math.sin(math.radians(h_dest)) + vn * math.cos(math.radians(h_dest))
                 pen = maneuver_min / 60 if node.side and side != node.side else 0.0
-                if sog_along > 0.5 and d <= finish_nm and \
+                if sog_along > 0.5 and d <= finish_nm and not night_gybe(node, side, twa, _mot) and \
                         land.segment_clear(node.lat, node.lon, *dest, skip_near=[dest, start], skip_nm=harbour_skip):
                     arr = node.t + timedelta(hours=d / sog_along + pen)
                     if best is None or arr < best[0]:
@@ -363,6 +394,8 @@ def route(grid: WeatherGrid, land, start, t0: datetime, dest, table, factor=1.0,
                         dbg["no_vel"] += 1
                     continue
                 ve, vn, side, twa, mot = vel
+                if night_gybe(node, side, twa, mot):
+                    continue  # gybes wait for daylight: hold this gybe until the sun is up
                 hours = step_h
                 man = 0
                 if node.side and side != node.side:

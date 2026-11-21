@@ -25,6 +25,14 @@ NO_LAND = LandMask([], (0, -80, 60, 20), res=0.5)
 T0 = utcnow().replace(minute=0, second=0, microsecond=0)
 
 
+@pytest.fixture(autouse=True)
+def _gybe_any_hour(monkeypatch):
+    """These tests start at the current hour: let them gybe at any hour so they do not depend on the
+    time of day they run (the daylight rule has its own tests)."""
+    from yachtspeed import router as _r
+    monkeypatch.setattr(_r, "DAYLIGHT_GYBES", False)
+
+
 def test_dead_downwind_route_gybes_and_beats_sailing_straight():
     from yachtspeed.speedtable import boat_speed, table_speed
 
@@ -261,3 +269,43 @@ def test_final_leg_records_motoring_and_never_sails_deeper_than_max_twa():
     assert r["status"] == "ok" and r["track"][-1]["motor"] is True and r["motor_hours"] > 0
     sail = [p for p in r["track"][1:] if not p.get("motor") and p.get("twa_deg") is not None]
     assert all(p["twa_deg"] <= 150 for p in sail)
+
+
+def test_gybes_only_in_daylight():
+    """A side change with the wind aft of the beam waits for sunrise; tacks and motoring do not."""
+    from datetime import datetime, timezone
+
+    from yachtspeed import router
+
+    noon = datetime(2026, 11, 21, 13, 0, tzinfo=timezone.utc)
+    night = datetime(2026, 11, 21, 23, 0, tzinfo=timezone.utc)
+    assert router.is_daylight(26.3, -15.8, noon) and not router.is_daylight(26.3, -15.8, night)
+    # sunrise at 26N 16W in late November is about 07:40 UTC, sunset about 18:20 UTC
+    assert not router.is_daylight(26.3, -15.8, datetime(2026, 11, 21, 7, 20, tzinfo=timezone.utc))
+    assert router.is_daylight(26.3, -15.8, datetime(2026, 11, 21, 8, 0, tzinfo=timezone.utc))
+    assert router.is_daylight(26.3, -15.8, datetime(2026, 11, 21, 18, 0, tzinfo=timezone.utc))
+    assert not router.is_daylight(26.3, -15.8, datetime(2026, 11, 21, 18, 40, tzinfo=timezone.utc))
+
+
+def test_route_holds_its_gybes_until_daylight():
+    from datetime import datetime, timezone
+
+    from yachtspeed import router
+
+    t0 = datetime(2026, 11, 21, 19, 0, tzinfo=timezone.utc)  # leaving at nightfall, dead downwind
+    g = ConstGrid(14, 0.0, t0)
+    start, dest = (31.0, -20.0), (28.5, -20.0)
+    free = route(g, NO_LAND, start, t0, dest, "oyster885_std", 0.85, step_h=1.0, max_twa=150, daylight_gybes=False)
+    day = route(g, NO_LAND, start, t0, dest, "oyster885_std", 0.85, step_h=1.0, max_twa=150, daylight_gybes=True)
+    assert free["status"] == day["status"] == "ok"
+    gybes = [a for a, b in zip(day["track"], day["track"][1:])
+             if a.get("side") and b.get("side") and a["side"] != b["side"]
+             and (a.get("twa_deg") or 0) + (b.get("twa_deg") or 0) > 180]
+    assert gybes, "a dead-downwind leg needs gybes"
+    for a in gybes:
+        t = datetime.fromisoformat(a["time_utc"].replace("Z", "+00:00"))
+        assert router.is_daylight(a["lat"], a["lon"], t), a["time_utc"]
+    assert any(not router.is_daylight(a["lat"], a["lon"], datetime.fromisoformat(a["time_utc"].replace("Z", "+00:00")))
+               for a, b in zip(free["track"], free["track"][1:])
+               if a.get("side") and b.get("side") and a["side"] != b["side"])  # unrestricted, it gybes at night
+    assert day["hours"] >= free["hours"]

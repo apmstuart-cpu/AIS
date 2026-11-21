@@ -363,6 +363,8 @@ def assumptions_md(info, cfg, strategies_json=None, climate_json=None) -> str:
               f"at most {s.get('motor_max_h')} h of motoring within the fuel consumption limitation.",
               *([f"- **Point of sail:** never deeper than {s['max_twa_deg']:.0f} deg off the wind under sail (broad reach, "
                  "no dead running or crash gybes); she gybes instead."] if s.get("max_twa_deg") else []),
+              *(["- **Gybes:** only in daylight (sunrise to sunset where she is); at night she holds her gybe until morning."]
+                if s.get("daylight_gybes") else []),
               "- **Sea state:** ERA5 ocean waves for past years and wind-derived seas in the forecast; following seas "
               "add up to +3 % (surfing), head and beam seas slow her.",
               "- **Current:** mean surface current for these dates over 2022-2025.",
