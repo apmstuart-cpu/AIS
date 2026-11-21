@@ -278,3 +278,32 @@ def test_patch_redoes_only_the_chosen_option_history(tmp_path, monkeypatch, cfg)
 def test_e_and_f_sail_no_deeper_than_140():
     assert climate.DEFAULT_STRATEGIES["E"]["max_twa"] == 140.0 and climate.DEFAULT_STRATEGIES["F"]["max_twa"] == 140.0
     assert "max_twa" not in climate.DEFAULT_STRATEGIES["A"]
+
+
+def test_stored_history_serves_a_later_start_under_way(tmp_path):
+    """Once under way the start date moves on; the past years already downloaded from the planned start
+    must be reused, not fetched again (each rerun would otherwise exhaust the daily weather quota)."""
+    conn = connect(str(tmp_path / "t.db"))
+    cells = [(25.0, -20.0), (25.0, -22.5)]
+
+    class Client:
+        n = 0
+
+        def fetch(self, provider, kind, lat, lon, start, end):
+            Client.n += 1
+            return [{"time_utc": start + "T00:00:00Z", "wind_speed_kn": 15.0, "wind_dir_from_deg": 60.0,
+                     "wave_height_m": 2.0, "wave_dir_from_deg": 60.0, "wave_period_s": 8.0}]
+
+    c = Client()
+    assert climate.fetch_year(conn, c, 2010, cells, "2010-11-20", "2010-12-19") == 2
+    climate.fetch_waves_year(conn, c, 2010, cells, "2010-11-20", "2010-12-19")
+    assert Client.n == 4
+    # a day later, from her position: everything is already there
+    assert climate.fetch_year(conn, c, 2010, cells, "2010-11-21", "2010-12-20") == 0
+    climate.fetch_waves_year(conn, c, 2010, cells, "2010-11-21", "2010-12-20")
+    assert Client.n == 4
+    assert climate.waves_complete(conn, 2010, cells, "2010-11-21", "2010-12-20")
+    # far enough on that the stored window no longer holds COVER_DAYS ahead: fetched afresh
+    assert climate.fetch_year(conn, c, 2010, cells, "2010-12-05", "2011-01-03") == 2
+    # an earlier start than anything stored is never treated as covered
+    assert climate.fetch_year(conn, c, 2010, cells, "2010-11-19", "2010-12-18") == 2

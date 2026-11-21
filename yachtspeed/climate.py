@@ -166,19 +166,30 @@ def cells_for(bbox, res):
     return [(la, lo) for la in lats for lo in lons]
 
 
+
+COVER_DAYS = 20  # a stored download window serves a later start if it still holds this many days after it
+
+
+def _covered(conn, table, year, start_date, end_date):
+    """Cells whose stored download for `year` already covers this window: it starts on or before
+    `start_date` and runs at least COVER_DAYS past it (or to `end_date` if sooner). Under way the start
+    moves on a day at a time; without this every rerun would download all the past years again."""
+    need = min(end_date, (datetime.strptime(start_date, "%Y-%m-%d") + timedelta(days=COVER_DAYS)).strftime("%Y-%m-%d"))
+    return {(round(r[0], 4), round(r[1], 4)) for r in conn.execute(
+        f"SELECT DISTINCT cell_lat, cell_lon FROM {table} WHERE year=? AND start_date<=? AND end_date>=?",
+        (year, start_date, need))}
+
 def fetch_year(conn, client, year, cells, start_date, end_date, thin_h=3, progress=None, enough=1.0) -> int:
     """Fetch ERA5 wind for every cell not yet stored; raises QuotaExceeded when the budget is spent.
     With `enough` < 1, a year that already has that share of its cells is left as it is (a few points
     that failed to download are filled by interpolation rather than waiting for the next day's quota)."""
     conn.executescript(SQL)
-    done = {(r[0], r[1]) for r in conn.execute(
-        "SELECT cell_lat, cell_lon FROM climate_cells WHERE year=? AND start_date=? AND end_date=?",
-        (year, start_date, end_date))}
+    done = _covered(conn, "climate_cells", year, start_date, end_date)
     if len(done) >= enough * len(cells) and enough < 1.0:
         return 0
     n = 0
     for la, lo in cells:
-        if (la, lo) in done:
+        if (round(la, 4), round(lo, 4)) in done:
             continue
         try:
             rows = client.fetch("om_era5", "wind", la, lo, start_date, end_date)
@@ -299,9 +310,7 @@ def wave_bbox(bbox, res=WAVE_RES):
 def fetch_waves_year(conn, client, year, cells, start_date, end_date, thin_h=3, enough=1.0):
     """ERA5 ocean waves (height, direction, period) per cell for one year; raises QuotaExceeded."""
     conn.executescript(SQL)
-    done = {(round(r[0], 4), round(r[1], 4)) for r in conn.execute(
-        "SELECT cell_lat, cell_lon FROM climate_wave_cells WHERE year=? AND start_date=? AND end_date=?",
-        (year, start_date, end_date))}
+    done = _covered(conn, "climate_wave_cells", year, start_date, end_date)
     if len(done) >= enough * len(cells) and enough < 1.0:
         return
     for la, lo in cells:
@@ -325,8 +334,7 @@ def fetch_waves_year(conn, client, year, cells, start_date, end_date, thin_h=3, 
 
 def waves_complete(conn, year, cells, start_date, end_date):
     conn.executescript(SQL)
-    n = conn.execute("SELECT count(*) FROM climate_wave_cells WHERE year=? AND start_date=? AND end_date=?",
-                     (year, start_date, end_date)).fetchone()[0]
+    n = len(_covered(conn, "climate_wave_cells", year, start_date, end_date))
     return n >= 0.9 * len(cells)
 
 
