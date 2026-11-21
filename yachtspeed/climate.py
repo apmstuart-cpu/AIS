@@ -215,6 +215,23 @@ def fetch_year(conn, client, year, cells, start_date, end_date, thin_h=3, progre
 CURRENT_YEARS = (2022, 2023, 2024, 2025)  # Open-Meteo's marine archive has currents from mid-2022
 
 
+CURRENT_NEAR_DAYS = 10  # currents stored for a start date this close are reused (they change slowly)
+
+
+def _md_gap(a: str, b: str) -> int:
+    """Days between two month-day strings ("11-21"), across the new year if shorter."""
+    da = datetime.strptime("2001-" + a, "%Y-%m-%d")
+    db = datetime.strptime("2001-" + b, "%Y-%m-%d")
+    d = abs((da - db).days)
+    return min(d, 365 - d)
+
+
+def _near_current_mds(conn, start_md: str) -> list[str]:
+    """Stored current start dates within CURRENT_NEAR_DAYS of start_md, nearest first."""
+    mds = [r[0] for r in conn.execute("SELECT DISTINCT start_md FROM climate_current")]
+    return sorted((m for m in mds if _md_gap(m, start_md) <= CURRENT_NEAR_DAYS), key=lambda m: _md_gap(m, start_md))
+
+
 class CurrentField:
     """Mean surface current (knots, east/north components) over the same calendar window in
     several recent years, on a coarse grid; currents on ocean passages are steady and large-scale."""
@@ -223,10 +240,12 @@ class CurrentField:
         self.lat0, self.lon0 = bbox[0], bbox[1]
         self.res = res
         self.uv = {}
-        for r in conn.execute("SELECT cell_lat, cell_lon, sum(u_sum), sum(v_sum), sum(n) FROM climate_current "
-                              "WHERE start_md=? GROUP BY cell_lat, cell_lon", (start_md,)):
-            if r[4]:
-                self.uv[(round(r[0], 4), round(r[1], 4))] = (r[2] / r[4], r[3] / r[4])
+        # each cell from the nearest stored start date (under way the start moves on a day at a time)
+        for md in reversed(_near_current_mds(conn, start_md) or [start_md]):
+            for r in conn.execute("SELECT cell_lat, cell_lon, sum(u_sum), sum(v_sum), sum(n) FROM climate_current "
+                                  "WHERE start_md=? GROUP BY cell_lat, cell_lon", (md,)):
+                if r[4]:
+                    self.uv[(round(r[0], 4), round(r[1], 4))] = (r[2] / r[4], r[3] / r[4])
 
     def at(self, lat, lon):
         fi, fj = (lat - self.lat0) / self.res, (lon - self.lon0) / self.res
@@ -381,8 +400,9 @@ def fetch_currents(conn, client, bbox, res, depart, max_days, years=CURRENT_YEAR
 
     conn.executescript(SQL)
     md = depart.strftime("%m-%d")
-    done = {(r[0], round(r[1], 4), round(r[2], 4)) for r in conn.execute(
-        "SELECT year, cell_lat, cell_lon FROM climate_current WHERE start_md=?", (md,))}
+    near = _near_current_mds(conn, md) or [md]
+    done = {(r[0], round(r[1], 4), round(r[2], 4)) for m in near for r in conn.execute(
+        "SELECT year, cell_lat, cell_lon FROM climate_current WHERE start_md=?", (m,))}
     for yr in years:
         d0 = depart.replace(year=yr)
         s_date, e_date = d0.strftime("%Y-%m-%d"), (d0 + timedelta(days=max_days)).strftime("%Y-%m-%d")

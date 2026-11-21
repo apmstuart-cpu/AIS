@@ -307,3 +307,31 @@ def test_stored_history_serves_a_later_start_under_way(tmp_path):
     assert climate.fetch_year(conn, c, 2010, cells, "2010-12-05", "2011-01-03") == 2
     # an earlier start than anything stored is never treated as covered
     assert climate.fetch_year(conn, c, 2010, cells, "2010-11-19", "2010-12-18") == 2
+
+
+def test_currents_from_a_nearby_start_date_are_reused(tmp_path):
+    """Under way the start date moves on; currents stored a day earlier serve without new downloads."""
+    conn = connect(str(tmp_path / "t.db"))
+    conn.executescript(climate.SQL)
+    bbox = (25.0, -25.0, 30.0, -20.0)
+
+    class Client:
+        n = 0
+
+        def fetch(self, provider, kind, lat, lon, start, end):
+            Client.n += 1
+            return [{"time_utc": start + "T00:00:00Z", "current_speed_kn": 0.5, "current_dir_to_deg": 270.0}]
+
+    d0 = datetime(2026, 11, 20, 10, tzinfo=timezone.utc)
+    climate.fetch_currents(conn, Client(), bbox, 5.0, d0, 28)
+    first = Client.n
+    assert first > 0
+    later = datetime(2026, 11, 21, 10, tzinfo=timezone.utc)
+    climate.fetch_currents(conn, Client(), bbox, 5.0, later, 28)
+    assert Client.n == first  # nothing fetched again
+    f = climate.CurrentField(conn, bbox, 5.0, later.strftime("%m-%d"))
+    u, v = f.at(27.5, -22.5)
+    assert u < -0.4 and abs(v) < 0.05  # the stored westgoing 0.5 kn
+    # a month later is too far: fetched afresh
+    climate.fetch_currents(conn, Client(), bbox, 5.0, datetime(2026, 12, 25, tzinfo=timezone.utc), 28)
+    assert Client.n > first
