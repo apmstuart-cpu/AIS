@@ -55,3 +55,31 @@ def test_rdp_keeps_a_closed_island_outline():
     far = 3
     s = fcmaps._rdp(ring[:far + 1], 0.005)[:-1] + fcmaps._rdp(ring[far:], 0.005)
     assert len(s) >= 4 and s[0] == s[-1]
+
+
+def test_wind_export_keeps_each_model_and_past_years(tmp_path, monkeypatch):
+    """The viewer re-weights the forecast models and can drop the fade, so the export keeps each model's wind and
+    the past-years mean alongside the blend, cell for cell."""
+    def fake_fetch(self, provider, kind, lat, lon, s, e):
+        t0 = datetime.fromisoformat(s + "T00:00:00+00:00")
+        n = int((datetime.fromisoformat(e + "T00:00:00+00:00") - t0).total_seconds() // 3600) + 24
+        base = 20.0 if "ecmwf" in provider else 10.0
+        return [{"time_utc": (t0 + timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M:00Z"), "wind_speed_kn": base,
+                 "wind_dir_from_deg": 60.0, "wind_gust_kn": None, "wave_height_m": 2.0, "wave_dir_from_deg": 60.0,
+                 "wave_period_s": 8.0, "grid_lat": lat, "grid_lon": lon} for h in range(n)]
+
+    monkeypatch.setattr(weather.OpenMeteo, "fetch", fake_fetch)
+    conn = connect(":memory:")
+    cfg = Config()
+    cfg.skill_weighting = False
+    client = weather.OpenMeteo(weather.Budget(conn, 10 ** 6, 10 ** 6, 10 ** 6))
+    dep = (utcnow() + timedelta(hours=3)).replace(minute=0, second=0, microsecond=0)
+    out = tmp_path / "w.json"
+    fcmaps.export_json(conn, cfg, client, (20.0, -30.0), (18.0, -40.0), dep, out, days=1, step_h=6,
+                       models=("ecmwf", "gfs"), waves=False, progress=lambda m: None)
+    d = json.loads(out.read_text())
+    n = len(d["times"]) * len(d["lats"]) * len(d["lons"])
+    assert set(d["model_wind"]) == {"ecmwf", "gfs"}
+    assert len(d["model_wind"]["ecmwf"]["speed_kn"]) == n and len(d["hist_wind"]["speed_kn"]) == n
+    assert d["model_wind"]["ecmwf"]["speed_kn"][0] == 20.0 and d["model_wind"]["gfs"]["speed_kn"][0] == 10.0
+    assert d["speed_kn"][0] == 15.0  # the blend is their (equal-weight) mean

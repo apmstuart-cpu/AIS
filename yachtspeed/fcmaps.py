@@ -455,6 +455,9 @@ def export_json(conn, cfg, client, start, dest, depart: datetime, out_path, days
     lats = [round(bbox[0] + i * res, 3) for i in range(int(round((bbox[2] - bbox[0]) / res)) + 1)]
     lons = [round(bbox[1] + j * res, 3) for j in range(int(round((bbox[3] - bbox[1]) / res)) + 1)]
     times, spd, wdir, fcs, wh, wd, wp = [], [], [], [], [], [], []
+    # each model's own wind and the past-years mean, so the viewer can re-weight the blend or drop the fade
+    per_model = {m: {"speed_kn": [], "dir_from": []} for m in used}
+    hist = {"speed_kn": [], "dir_from": []}
     for n in range(int(days * 24 / step_h) + 1):
         t = depart + timedelta(hours=n * step_h)
         if t <= fs:
@@ -468,13 +471,24 @@ def export_json(conn, cfg, client, start, dest, depart: datetime, out_path, days
         for la in lats:
             for lo in lons:
                 f = blend.sample(la, lo, t) if (blend is not None and wf > 0) else None
+                for g, m in zip(grids, used):
+                    x = g.sample(la, lo, t)
+                    ok = x and x.get("wind_speed_kn") is not None
+                    per_model[m]["speed_kn"].append(round(x["wind_speed_kn"], 1) if ok else None)
+                    per_model[m]["dir_from"].append(round(x["wind_dir_from_deg"]) if ok else None)
                 acc_u = acc_v = acc_s = tw = 0.0
-                if wf < 1 or f is None:
+                if True:  # past years at every step (the viewer can show the forecast without the fade)
                     for g, shift, w in clims:
                         c = g.sample(la, lo, t + shift)
                         if c and c.get("wind_speed_kn") is not None:
                             u, v = _uv_from(c["wind_speed_kn"], c["wind_dir_from_deg"])
                             acc_u, acc_v, acc_s, tw = acc_u + u * w, acc_v + v * w, acc_s + c["wind_speed_kn"] * w, tw + w
+                if tw:
+                    hist["speed_kn"].append(round(acc_s / tw, 1))
+                    hist["dir_from"].append(round((math.degrees(math.atan2(-acc_u / tw, -acc_v / tw)) + 360) % 360))
+                else:
+                    hist["speed_kn"].append(None)
+                    hist["dir_from"].append(None)
                 ff = wf if (f is not None and tw) else (1.0 if f is not None else 0.0)
                 if f is None and not tw:
                     spd.append(None)
@@ -529,7 +543,8 @@ def export_json(conn, cfg, client, start, dest, depart: datetime, out_path, days
            "weights": ({f"{n} d ahead": {m: round(100 * x) for m, x in w.items()} for n, w in weights.by_day.items()}
                        if weights is not None else None),
            "fade_utc": [iso(fs), iso(fe)], "years": yrs, "speed_kn": spd, "dir_from": wdir,
-           "wave_m": wh, "wave_dir_from": wd, "wave_s": wp, "land": land, "routes": routes}
+           "wave_m": wh, "wave_dir_from": wd, "wave_s": wp, "land": land, "routes": routes,
+           "model_wind": per_model, "hist_wind": hist}
     Path(out_path).write_text(json.dumps(out, separators=(",", ":")))
     return {"times": len(times), "cells": len(lats) * len(lons), "models": used, "years": len(yrs),
             "forecast_until": iso(fe), "routes": list(routes), "bytes": Path(out_path).stat().st_size}
